@@ -1,0 +1,6 @@
+Django>=6.0,<7.0
+djangorestframework>=3.17
+django-cors-headers>=4.9
+fireo>=2.2,<3.0
+python-dotenv>=1.2
+PyJWT>=2.8

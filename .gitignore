@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+sejong-app-f1886-firebase-adminsdk-fbsvc-6981d46b30.json
+sejong-cloud-ff73493133e6.json
+
+# Django
+db.sqlite3
+staticfiles/
+
+# Секретные ключи Firebase / Google Cloud — никогда не коммитить!
+*firebase-adminsdk*.json
+sejong-cloud-*.json
+
+# IDE
+.idea/
+.vscode/
