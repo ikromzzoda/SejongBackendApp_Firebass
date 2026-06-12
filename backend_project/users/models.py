@@ -15,7 +15,7 @@ class User(Model):
         ('Guest',   'Guest'),
     )
 
-    username      = TextField(required=True, unique=True)
+    username      = TextField(required=True)
     password      = TextField(required=True)
     fullname      = TextField()
     email         = TextField()
@@ -32,7 +32,7 @@ class User(Model):
         ('Approved', 'Approved'), # Админ подтвердил
         ('Rejected', 'Rejected'), # Админ отклонил
     )
-    verification_status = TextField(choices=VERIFICATION_CHOICES, default='Pending')
+    verification_status = TextField(default='Pending')
 
     class Meta:
         collection_name = 'users'

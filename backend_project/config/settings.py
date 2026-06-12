@@ -117,6 +117,14 @@ REST_FRAMEWORK = {
     ],
 }
 
+# --- Google Drive (аватары) -----------------------------------------------
+
+GOOGLE_DRIVE_CREDENTIALS = os.getenv(
+    'GOOGLE_DRIVE_CREDENTIALS',
+    str(BASE_DIR / 'sejong-app-f1886-firebase-adminsdk-fbsvc-6981d46b30.json'),
+)
+GOOGLE_DRIVE_AVATAR_FOLDER_ID = os.getenv('GOOGLE_DRIVE_AVATAR_FOLDER_ID', '')
+
 # --- CORS (доступ для мобильного приложения и сайта) -----------------------
 
 if DEBUG:

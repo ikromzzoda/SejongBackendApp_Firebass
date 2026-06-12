@@ -42,6 +42,31 @@ def jwt_required(view_func):
     return wrapper
 
 
+def admin_required(view_func):
+    """Проверяет JWT + blacklist + статус Admin."""
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        payload, error = _extract_payload(request)
+        if error:
+            return error
+
+        from users.models import BlacklistedToken
+        jti = payload.get('jti', '')
+        try:
+            bt = BlacklistedToken.collection.get(f'blacklisted_tokens/{jti}')
+            if bt:
+                return JsonResponse({'error': 'Токен отозван'}, status=401)
+        except Exception:
+            pass
+
+        if payload.get('status') != 'Admin':
+            return JsonResponse({'error': 'Доступ запрещён. Требуются права администратора.'}, status=403)
+
+        request.user_payload = payload
+        return view_func(request, *args, **kwargs)
+    return wrapper
+
+
 def jwt_verify_only(view_func):
     """
     Быстрая проверка: только подпись, без обращения к Firestore.
