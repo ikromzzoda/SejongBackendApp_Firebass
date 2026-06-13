@@ -4,3 +4,5 @@ django-cors-headers>=4.9
 fireo>=2.2,<3.0
 python-dotenv>=1.2
 PyJWT>=2.8
+google-api-python-client>=2.0
+google-auth>=2.0
