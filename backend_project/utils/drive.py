@@ -57,3 +57,80 @@ def delete_avatar(file_id: str) -> None:
         service.files().delete(fileId=file_id).execute()
     except Exception:
         pass
+
+
+def upload_book_cover(file_obj, filename: str, mime_type: str) -> tuple[str, str]:
+    """Загрузить обложку книги в папку обложек на Google Drive.
+    Возвращает (file_id, public_url).
+    """
+    service = _get_service()
+
+    metadata = {
+        'name': filename,
+        'parents': [settings.GOOGLE_DRIVE_BOOK_COVERS_FOLDER_ID],
+    }
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(file_obj.read()),
+        mimetype=mime_type,
+        resumable=False,
+    )
+
+    uploaded = service.files().create(
+        body=metadata,
+        media_body=media,
+        fields='id',
+    ).execute()
+
+    file_id = uploaded['id']
+
+    service.permissions().create(
+        fileId=file_id,
+        body={'type': 'anyone', 'role': 'reader'},
+    ).execute()
+
+    url = f'https://drive.google.com/uc?id={file_id}'
+    return file_id, url
+
+
+def upload_book_file(file_obj, filename: str, mime_type: str) -> tuple[str, str]:
+    """Загрузить файл книги (PDF/EPUB) на Google Drive.
+    Возвращает (file_id, public_url).
+    """
+    service = _get_service()
+
+    metadata = {
+        'name': filename,
+        'parents': [settings.GOOGLE_DRIVE_BOOK_FILES_FOLDER_ID],
+    }
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(file_obj.read()),
+        mimetype=mime_type,
+        resumable=True,
+    )
+
+    uploaded = service.files().create(
+        body=metadata,
+        media_body=media,
+        fields='id',
+    ).execute()
+
+    file_id = uploaded['id']
+
+    service.permissions().create(
+        fileId=file_id,
+        body={'type': 'anyone', 'role': 'reader'},
+    ).execute()
+
+    url = f'https://drive.google.com/uc?id={file_id}'
+    return file_id, url
+
+
+def delete_file(file_id: str) -> None:
+    """Удалить любой файл с Google Drive по ID."""
+    try:
+        service = _get_service()
+        service.files().delete(fileId=file_id).execute()
+    except Exception:
+        pass

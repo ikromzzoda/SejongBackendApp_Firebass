@@ -7,13 +7,21 @@ urlpatterns = [
     path('logout/',   views.logout,   name='user-logout'),
 
     # Admin
-    path('admin/pending/',                      views.admin_pending_users, name='admin-pending'),
-    path('admin/verify/<str:user_id>/',         views.admin_verify_user,   name='admin-verify'),
-    path('admin/set-status/<str:user_id>/',     views.admin_set_status,    name='admin-set-status'),
-    path('admin/assign-group/<str:user_id>/',   views.admin_assign_group,  name='admin-assign-group'),
-    path('admin/groups/',                       views.admin_list_groups,   name='admin-groups-list'),
-    path('admin/groups/create/',                views.admin_create_group,  name='admin-groups-create'),
-    path('admin/groups/<str:group_id>/delete/', views.admin_delete_group,  name='admin-groups-delete'),
+    path('admin/users/',                          views.admin_list_users,    name='admin-users-list'),
+    path('admin/users/<str:user_id>/',            views.admin_get_user,      name='admin-users-get'),
+    path('admin/users/<str:user_id>/edit/',       views.admin_edit_user,     name='admin-users-edit'),
+    path('admin/pending/',                        views.admin_pending_users, name='admin-pending'),
+    path('admin/users/create/',                   views.admin_create_user,   name='admin-users-create'),
+    path('admin/verify/<str:user_id>/',           views.admin_verify_user,   name='admin-verify'),
+    path('admin/set-status/<str:user_id>/',       views.admin_set_status,    name='admin-set-status'),
+    path('admin/assign-group/<str:user_id>/',     views.admin_assign_group,  name='admin-assign-group'),
+    path('admin/groups/',                         views.admin_list_groups,   name='admin-groups-list'),
+    path('admin/groups/create/',                  views.admin_create_group,  name='admin-groups-create'),
+    path('admin/groups/<str:group_id>/delete/',   views.admin_delete_group,  name='admin-groups-delete'),
+
+    # Bulk import
+    path('admin/students/import/',          views.admin_bulk_import,          name='admin-bulk-import'),
+    path('admin/students/import/template/', views.admin_bulk_import_template, name='admin-bulk-import-template'),
 
     # Profile
     path('profile/update/',       views.update_profile, name='profile-update'),

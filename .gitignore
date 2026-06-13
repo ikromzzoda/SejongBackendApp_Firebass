@@ -1,20 +1,54 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
 venv/
-.env
+.venv/
 
+
+# Env файлы
+.env
+.env.*
+!.env.example
+env/
+
+# Секретные ключи Firebase / Google Cloud — никогда не коммитить!
 sejong-app-f1886-firebase-adminsdk-fbsvc-6981d46b30.json
-sejong-cloud-ff73493133e6.json
+sejong-cloud-cf940f479f26.json
+*-firebase-adminsdk-*.json
+*serviceAccount*.json
+*service_account*.json
+google-credentials.json
 
 # Django
 db.sqlite3
 staticfiles/
+mediafiles/
+media/
+*.log
 
-# Секретные ключи Firebase / Google Cloud — никогда не коммитить!
-*firebase-adminsdk*.json
-sejong-cloud-*.json
+# Migrations (опционально — раскомментируйте если не хотите коммитить)
+# */migrations/0*.py
 
 # IDE
 .idea/
 .vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# mypy
+.mypy_cache/

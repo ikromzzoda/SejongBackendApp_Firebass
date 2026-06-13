@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "users",
+    "ebook_and_chat",
 ]
 
 MIDDLEWARE = [
@@ -123,7 +124,9 @@ GOOGLE_DRIVE_CREDENTIALS = os.getenv(
     'GOOGLE_DRIVE_CREDENTIALS',
     str(BASE_DIR / 'sejong-app-f1886-firebase-adminsdk-fbsvc-6981d46b30.json'),
 )
-GOOGLE_DRIVE_AVATAR_FOLDER_ID = os.getenv('GOOGLE_DRIVE_AVATAR_FOLDER_ID', '')
+GOOGLE_DRIVE_AVATAR_FOLDER_ID      = os.getenv('GOOGLE_DRIVE_AVATAR_FOLDER_ID', '')
+GOOGLE_DRIVE_BOOK_COVERS_FOLDER_ID = os.getenv('GOOGLE_DRIVE_BOOK_COVERS_FOLDER_ID', '')
+GOOGLE_DRIVE_BOOK_FILES_FOLDER_ID  = os.getenv('GOOGLE_DRIVE_BOOK_FILES_FOLDER_ID', '')
 
 # --- CORS (доступ для мобильного приложения и сайта) -----------------------
 
