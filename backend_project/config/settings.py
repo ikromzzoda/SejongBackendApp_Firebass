@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "users",
     "ebook_and_chat",
+    "info",
 ]
 
 MIDDLEWARE = [
