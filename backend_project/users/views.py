@@ -10,10 +10,11 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from openpyxl import load_workbook, Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
-from .models import User, BlacklistedToken, Group
+from .models import User, BlacklistedToken, DEFAULT_AVATAR
+from groups.models import Group
 from utils.jwt_utils import generate_token, decode_token
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_avatar, delete_avatar
@@ -21,6 +22,10 @@ from utils.drive import upload_avatar, delete_avatar
 
 PHONE_RE = re.compile(r'^\+992\d{9}$')
 
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
 
 @api_view(['POST'])
 def register(request):
@@ -47,14 +52,14 @@ def register(request):
         )
 
     user = User()
-    user.username     = data['username']
-    user.fullname     = data.get('fullname', '')
-    user.email        = data['email']
-    user.phone_number = data['phone_number']
-    user.password     = make_password(data['password'])
+    user.username      = data['username']
+    user.fullname      = data.get('fullname', '')
+    user.email         = data['email']
+    user.phone_number  = data['phone_number']
+    user.password      = make_password(data['password'])
     user.date_of_birth = data.get('date_of_birth', '')
-    user.status               = 'Guest'
-    user.verification_status  = 'Pending'
+    user.status              = 'Guest'
+    user.verification_status = 'Pending'
     user.save()
 
     token = generate_token(
@@ -122,7 +127,6 @@ def logout(request):
     except pyjwt.InvalidTokenError:
         return Response({'error': 'Недействительный токен'}, status=status.HTTP_401_UNAUTHORIZED)
 
-    # Добавляем JTI в чёрный список (document ID = JTI → поиск O(1))
     bt = BlacklistedToken()
     bt.id = payload['jti']
     bt.save()
@@ -131,7 +135,7 @@ def logout(request):
 
 
 # ---------------------------------------------------------------------------
-# Admin endpoints
+# Admin — helpers
 # ---------------------------------------------------------------------------
 
 VALID_STATUSES = {'Student', 'Teacher', 'Admin', 'Guest'}
@@ -162,18 +166,19 @@ def _user_dict(user, groups_cache: dict | None = None):
     }
 
 
+# ---------------------------------------------------------------------------
+# Admin — users
+# ---------------------------------------------------------------------------
+
 @api_view(['GET'])
 @admin_required
 def admin_list_users(request):
     """Список всех пользователей с фильтрацией.
-    Query params (все необязательные):
-      ?status=Student|Teacher|Admin|Guest
-      ?verification_status=Pending|Approved|Rejected
-      ?group_id=groups/...
+    Query params: ?status=  ?verification_status=  ?group_id=
     """
-    filter_status  = request.query_params.get('status')
-    filter_verify  = request.query_params.get('verification_status')
-    filter_group   = request.query_params.get('group_id')
+    filter_status = request.query_params.get('status')
+    filter_verify = request.query_params.get('verification_status')
+    filter_group  = request.query_params.get('group_id')
 
     if filter_status and filter_status in VALID_STATUSES:
         users = list(User.collection.filter('status', '==', filter_status).fetch(500))
@@ -208,13 +213,7 @@ def admin_get_user(request, user_id):
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_user(request, user_id):
-    """Редактировать данные пользователя.
-    Body (все поля необязательные):
-    {
-        "fullname", "email", "phone_number", "date_of_birth",
-        "status", "verification_status", "group_id", "password"
-    }
-    """
+    """Редактировать данные пользователя."""
     try:
         user = User.collection.get(f'users/{user_id}')
     except Exception:
@@ -317,7 +316,7 @@ def admin_pending_users(request):
 @api_view(['POST'])
 @admin_required
 def admin_verify_user(request, user_id):
-    """Подтвердить или отклонить верификацию пользователя.
+    """Подтвердить или отклонить верификацию.
     Body: { "action": "approve" | "reject" }
     """
     action = request.data.get('action')
@@ -377,45 +376,8 @@ def admin_set_status(request, user_id):
 
 @api_view(['POST'])
 @admin_required
-def admin_assign_group(request, user_id):
-    """Назначить пользователя в группу.
-    Body: { "group_id": "<id группы>" }
-    """
-    group_id = request.data.get('group_id')
-    if not group_id:
-        return Response({'error': 'Поле "group_id" обязательно'}, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        group = Group.collection.get(f'groups/{group_id}')
-    except Exception:
-        group = None
-    if not group:
-        return Response({'error': 'Группа не найдена'}, status=status.HTTP_404_NOT_FOUND)
-
-    try:
-        user = User.collection.get(f'users/{user_id}')
-    except Exception:
-        user = None
-    if not user:
-        return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
-
-    user.group = group_id
-    user.update()
-    return Response({
-        'message': f'Пользователь добавлен в группу "{group.name}".',
-        'user': _user_dict(user),
-    })
-
-
-@api_view(['POST'])
-@admin_required
 def admin_create_user(request):
-    """Создать нового пользователя вручную.
-    Body: {
-        "username", "password", "email", "phone_number" — обязательные
-        "fullname", "date_of_birth", "status", "group_id", "avatar" — необязательные
-    }
-    """
+    """Создать нового пользователя вручную."""
     data = request.data
 
     for field in ('username', 'password', 'email', 'phone_number'):
@@ -445,7 +407,7 @@ def admin_create_user(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    group_id = data.get('group_id', '')
+    group_id   = data.get('group_id', '')
     group_name = data.get('group', '')
     if group_name and not group_id:
         found = list(Group.collection.filter('name', '==', group_name).fetch(1))
@@ -459,8 +421,6 @@ def admin_create_user(request):
             group = None
         if not group:
             return Response({'error': 'Группа не найдена'}, status=status.HTTP_404_NOT_FOUND)
-
-    from .models import DEFAULT_AVATAR
 
     user = User()
     user.username      = data['username']
@@ -481,52 +441,6 @@ def admin_create_user(request):
     }, status=status.HTTP_201_CREATED)
 
 
-@api_view(['GET'])
-@admin_required
-def admin_list_groups(request):
-    """Список всех групп."""
-    groups = list(Group.collection.fetch(100))
-    return Response({'groups': [{'id': g.id, 'name': g.name} for g in groups]})
-
-
-@api_view(['POST'])
-@admin_required
-def admin_create_group(request):
-    """Создать новую группу.
-    Body: { "name": "название группы" }
-    """
-    name = request.data.get('name', '').strip()
-    if not name:
-        return Response({'error': 'Поле "name" обязательно'}, status=status.HTTP_400_BAD_REQUEST)
-
-    existing = list(Group.collection.filter('name', '==', name).fetch(1))
-    if existing:
-        return Response({'error': f'Группа с именем "{name}" уже существует'}, status=status.HTTP_400_BAD_REQUEST)
-
-    group = Group()
-    group.name = name
-    group.save()
-    return Response(
-        {'message': f'Группа "{name}" создана.', 'group': {'id': group.id, 'name': group.name}},
-        status=status.HTTP_201_CREATED,
-    )
-
-
-@api_view(['DELETE'])
-@admin_required
-def admin_delete_group(request, group_id):
-    """Удалить группу по ID."""
-    try:
-        group = Group.collection.get(f'groups/{group_id}')
-    except Exception:
-        group = None
-    if not group:
-        return Response({'error': 'Группа не найдена'}, status=status.HTTP_404_NOT_FOUND)
-
-    Group.collection.delete(f'groups/{group_id}')
-    return Response({'message': f'Группа "{group.name}" удалена.'})
-
-
 # ---------------------------------------------------------------------------
 # Profile
 # ---------------------------------------------------------------------------
@@ -534,16 +448,8 @@ def admin_delete_group(request, group_id):
 @api_view(['POST'])
 @jwt_required
 def update_profile(request):
-    """Обновить данные своего профиля. Все поля необязательные.
-    Body: {
-        "username":       "новый_логин",
-        "email":          "new@email.com",
-        "phone_number":   "+992XXXXXXXXX",
-        "check_password": "текущий_пароль",
-        "password":       "новый_пароль"
-    }
-    """
-    data = request.data
+    """Обновить данные своего профиля."""
+    data    = request.data
     payload = request.user_payload
     user_id = payload['user_id']
 
@@ -619,16 +525,14 @@ MAX_AVATAR_SIZE = 3 * 1024 * 1024  # 3 MB
 @api_view(['POST'])
 @jwt_required
 def change_avatar(request):
-    """Заменить аватар пользователя.
-    Тело запроса: multipart/form-data, поле "avatar" — файл изображения.
-    """
+    """Заменить аватар пользователя (multipart/form-data, поле "avatar")."""
     file = request.FILES.get('avatar')
     if not file:
         return Response({'error': 'Файл не передан. Используйте поле "avatar"'}, status=status.HTTP_400_BAD_REQUEST)
 
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         return Response(
-            {'error': f'Недопустимый формат. Разрешены: JPEG, PNG, WEBP'},
+            {'error': 'Недопустимый формат. Разрешены: JPEG, PNG, WEBP'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -651,7 +555,7 @@ def change_avatar(request):
     except Exception as e:
         return Response({'error': f'Ошибка загрузки на Google Drive: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
-    user.avatar = new_url
+    user.avatar    = new_url
     user.avatar_id = new_file_id
     user.update()
 
@@ -665,16 +569,14 @@ def change_avatar(request):
 # Bulk import
 # ---------------------------------------------------------------------------
 
-# Маппинг возможных заголовков колонок (рус/англ) → поле модели
 _COL_ALIASES = {
-    'fullname':      ['Full Name', 'фио', 'ф.и.о', 'ф.и.о.', 'имя', 'полное имя', 'full name', 'name', 'имя фамилия'],
-    'email':         ['Email', 'почта', 'e-mail', 'эл. почта', 'электронная почта'],
-    'phone_number':  ['Phone Number', 'phone_number', 'телефон', 'номер', 'номер телефона', 'моб', 'моб.', 'тел'],
-    'date_of_birth': ['Date of Birth/생년월일', 'дата рождения', 'дата', 'birth', 'д.р.', 'день рождения'],
-    'group':         ['Group', 'группа', 'учебная группа', 'класс'],
+    'fullname':      ['fullname', 'фио', 'ф.и.о', 'ф.и.о.', 'имя', 'полное имя', 'full name', 'name', 'имя фамилия'],
+    'email':         ['email', 'почта', 'e-mail', 'эл. почта', 'электронная почта'],
+    'phone_number':  ['phone', 'phone_number', 'телефон', 'номер', 'номер телефона', 'моб', 'моб.', 'тел'],
+    'date_of_birth': ['date_of_birth', 'дата рождения', 'дата', 'birth', 'д.р.', 'день рождения'],
+    'group':         ['group', 'группа', 'учебная группа', 'класс'],
 }
 
-# Таблица транслитерации для генерации username
 _TRANSLIT = {
     'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh','з':'z',
     'и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r',
@@ -744,10 +646,7 @@ def _auto_width(ws):
 @api_view(['POST'])
 @admin_required
 def admin_bulk_import(request):
-    """Массовая загрузка студентов из Excel-файла.
-    Принимает: multipart/form-data, поле "file" — .xlsx файл.
-    Возвращает: Excel-файл с username, password и статусом каждой строки.
-    """
+    """Массовая загрузка студентов из Excel (.xlsx), поле "file"."""
     excel_file = request.FILES.get('file')
     if not excel_file:
         return Response({'error': 'Файл не передан. Используйте поле "file"'}, status=status.HTTP_400_BAD_REQUEST)
@@ -761,7 +660,7 @@ def admin_bulk_import(request):
         return Response({'error': 'Не удалось открыть файл. Убедитесь что это корректный .xlsx'}, status=status.HTTP_400_BAD_REQUEST)
 
     ws_in = wb_in.active
-    rows = list(ws_in.iter_rows())
+    rows  = list(ws_in.iter_rows())
     if len(rows) < 2:
         return Response({'error': 'Файл пустой или содержит только заголовок'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -772,13 +671,8 @@ def admin_bulk_import(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Загружаем все существующие username в память для быстрой проверки уникальности
     existing_usernames = {u.username for u in User.collection.fetch(10000)}
-
-    # Загружаем группы по имени
-    groups_by_name = {g.name.lower(): g.id for g in Group.collection.fetch(100)}
-
-    from .models import DEFAULT_AVATAR
+    groups_by_name     = {g.name.lower(): g.id for g in Group.collection.fetch(100)}
 
     results = []
     for row in rows[1:]:
@@ -819,9 +713,8 @@ def admin_bulk_import(request):
         except Exception as e:
             results.append((fullname, email, phone_number, group_name, '', '', 'Ошибка', str(e)))
 
-    # --- Формируем Excel с результатами ---
-    wb_out = Workbook()
-    ws_out = wb_out.active
+    wb_out  = Workbook()
+    ws_out  = wb_out.active
     ws_out.title = 'Результаты импорта'
     ws_out.row_dimensions[1].height = 20
 
@@ -836,10 +729,9 @@ def admin_bulk_import(request):
         ws_out.append([i, fullname, email, phone, group, username, password, status_text, note])
         row_fill = green_fill if status_text == 'Успешно' else red_fill
         for col in range(1, len(headers) + 1):
-            ws_out.cell(row=i + 1, column=col).fill = row_fill
+            ws_out.cell(row=i + 1, column=col).fill      = row_fill
             ws_out.cell(row=i + 1, column=col).alignment = Alignment(vertical='center')
 
-    # Жирный шрифт для username и password
     for row in ws_out.iter_rows(min_row=2, min_col=6, max_col=7):
         for cell in row:
             cell.font = Font(bold=True)
@@ -849,11 +741,9 @@ def admin_bulk_import(request):
     success_count = sum(1 for r in results if r[6] == 'Успешно')
     error_count   = len(results) - success_count
 
-    # Итоговая строка
     ws_out.append([])
     ws_out.append(['', f'Итого: {len(results)} строк | Успешно: {success_count} | Ошибок: {error_count}'])
-    summary_cell = ws_out.cell(row=ws_out.max_row, column=2)
-    summary_cell.font = Font(bold=True, size=11)
+    ws_out.cell(row=ws_out.max_row, column=2).font = Font(bold=True, size=11)
 
     output = io.BytesIO()
     wb_out.save(output)
@@ -879,7 +769,6 @@ def admin_bulk_import_template(request):
     ws.append(headers)
     _style_header(ws, len(headers))
 
-    # Пример строки
     example_fill = PatternFill('solid', fgColor='EBF3FB')
     ws.append(['Иванов Иван Иванович', 'ivan@example.com', '+992991234567', '2003-05-20', 'CS-101'])
     for col in range(1, len(headers) + 1):

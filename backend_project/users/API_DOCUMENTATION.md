@@ -1,6 +1,8 @@
-# API Documentation — Sejong Backend
+# API Documentation — Users App
 
 **Base URL:** `http://127.0.0.1:8000/api/users`
+
+> Документация по группам находится в `groups/API_DOCUMENTATION.md`
 
 ---
 
@@ -13,10 +15,10 @@ Authorization: Bearer <token>
 ```
 
 ### Форматы ответов
-- Успех: данные + соответствующий HTTP-код (200 / 201)
-- Ошибка: `{ "error": "описание ошибки" }` + соответствующий HTTP-код
+- Успех: данные + HTTP 200 / 201
+- Ошибка: `{ "error": "описание" }` + соответствующий HTTP-код
 
-### Объект пользователя (общий формат)
+### Объект пользователя
 Возвращается во всех ответах, связанных с пользователем:
 ```json
 {
@@ -30,12 +32,12 @@ Authorization: Bearer <token>
     "group": "CS-101"
 }
 ```
-> Поле `group` содержит **имя группы**, не ID. Если группа не назначена — пустая строка `""`.
+> `group` — имя группы. Если не назначена — пустая строка `""`
 
 ### Статусы пользователя
 | Значение | Описание |
 |----------|----------|
-| `Guest` | Только зарегистрировался, ожидает верификации |
+| `Guest` | Только зарегистрировался |
 | `Student` | Подтверждён администратором |
 | `Teacher` | Преподаватель |
 | `Admin` | Администратор |
@@ -52,7 +54,7 @@ Authorization: Bearer <token>
 ## Аутентификация
 
 ### POST `/register/`
-Регистрация нового пользователя. После регистрации статус `Guest`, верификация `Pending` — нужно подтверждение администратора.
+Регистрация нового пользователя. После регистрации: `status=Guest`, `verification_status=Pending`.
 
 **Headers:** не требуются
 
@@ -95,7 +97,7 @@ Authorization: Bearer <token>
 // 400 — неверный формат телефона
 { "error": "Номер должен начинаться с '+992' и содержать 9 цифр после него." }
 
-// 400 — username уже занят
+// 400 — username занят
 { "error": "Пользователь с таким username уже существует" }
 ```
 
@@ -167,7 +169,7 @@ Authorization: Bearer <token>
 ## Профиль
 
 ### POST `/profile/update/`
-Обновление данных своего профиля. Все поля необязательные — передавайте только то, что нужно изменить.
+Обновление данных своего профиля. Все поля необязательные.
 
 **Headers:**
 ```
@@ -185,7 +187,7 @@ Authorization: Bearer <token>
 }
 ```
 
-> При смене пароля поле `check_password` (текущий пароль) обязательно.
+> При смене пароля поле `check_password` обязательно.
 
 **Успех — 200:**
 ```json
@@ -196,7 +198,7 @@ Authorization: Bearer <token>
 }
 ```
 
-> После обновления возвращается **новый токен** — сохраните его вместо старого.
+> Возвращается **новый токен** — сохраните его вместо старого.
 
 **Ошибки:**
 ```json
@@ -235,7 +237,7 @@ Authorization: Bearer <token>
 **Body (multipart/form-data):**
 | Поле | Тип | Описание |
 |------|-----|----------|
-| `avatar` | File | Изображение JPEG, PNG или WEBP, максимум 3 МБ |
+| `avatar` | File | JPEG, PNG или WEBP, максимум 3 МБ |
 
 **Успех — 200:**
 ```json
@@ -276,12 +278,8 @@ Authorization: Bearer <token>
 
 ---
 
-### Пользователи
-
----
-
-#### GET `/admin/users/`
-Список всех пользователей. Поддерживает фильтрацию через query-параметры.
+### GET `/admin/users/`
+Список всех пользователей. Поддерживает фильтрацию.
 
 **Headers:**
 ```
@@ -291,8 +289,8 @@ Authorization: Bearer <admin_token>
 **Query параметры (необязательные, только один за раз):**
 | Параметр | Значения | Пример |
 |----------|----------|--------|
-| `status` | `Student`, `Teacher`, `Admin`, `Guest` | `?status=Student` |
-| `verification_status` | `Pending`, `Approved`, `Rejected` | `?verification_status=Pending` |
+| `status` | `Student` `Teacher` `Admin` `Guest` | `?status=Student` |
+| `verification_status` | `Pending` `Approved` `Rejected` | `?verification_status=Pending` |
 | `group_id` | ID группы | `?group_id=groups/AbCdEf...` |
 
 **Успех — 200:**
@@ -316,7 +314,7 @@ Authorization: Bearer <admin_token>
 
 ---
 
-#### GET `/admin/users/<user_id>/`
+### GET `/admin/users/<user_id>/`
 Получить одного пользователя по ID.
 
 **Headers:**
@@ -348,8 +346,8 @@ Authorization: Bearer <admin_token>
 
 ---
 
-#### PATCH `/admin/users/<user_id>/edit/`
-Редактировать данные пользователя. Все поля необязательные — передавайте только то, что нужно изменить.
+### PATCH `/admin/users/<user_id>/edit/`
+Редактировать данные пользователя. Все поля необязательные.
 
 **Headers:**
 ```
@@ -375,12 +373,12 @@ Content-Type: application/json
 |------|----------|
 | `fullname` | ФИО |
 | `email` | Email |
-| `phone_number` | Телефон в формате `+992XXXXXXXXX` |
+| `phone_number` | Формат `+992XXXXXXXXX` |
 | `date_of_birth` | Дата рождения |
 | `status` | `Student` / `Teacher` / `Admin` / `Guest` |
 | `verification_status` | `Pending` / `Approved` / `Rejected` |
-| `group` | Имя группы (например `"CS-101"`) |
-| `group_id` | ID группы (альтернатива полю `group`) |
+| `group` | Имя группы, например `"CS-101"` |
+| `group_id` | ID группы (альтернатива `group`) |
 | `password` | Новый пароль (без подтверждения — только для админа) |
 
 **Успех — 200:**
@@ -425,8 +423,8 @@ Content-Type: application/json
 
 ---
 
-#### POST `/admin/users/create/`
-Создать нового пользователя вручную. Пользователь сразу получает `verification_status: Approved`.
+### POST `/admin/users/create/`
+Создать нового пользователя вручную. Сразу получает `verification_status: Approved`.
 
 **Headers:**
 ```
@@ -453,7 +451,7 @@ Authorization: Bearer <admin_token>
 | `username` | string | ✅ | |
 | `password` | string | ✅ | |
 | `email` | string | ✅ | |
-| `phone_number` | string | ✅ | Формат: `+992XXXXXXXXX` |
+| `phone_number` | string | ✅ | Формат `+992XXXXXXXXX` |
 | `fullname` | string | ❌ | |
 | `date_of_birth` | string | ❌ | |
 | `status` | string | ❌ | По умолчанию `Student` |
@@ -498,8 +496,8 @@ Authorization: Bearer <admin_token>
 
 ---
 
-#### GET `/admin/pending/`
-Список пользователей, ожидающих верификации (`verification_status = Pending`).
+### GET `/admin/pending/`
+Список пользователей с `verification_status = Pending`.
 
 **Headers:**
 ```
@@ -526,9 +524,9 @@ Authorization: Bearer <admin_token>
 
 ---
 
-#### POST `/admin/verify/<user_id>/`
+### POST `/admin/verify/<user_id>/`
 Подтвердить или отклонить верификацию пользователя.
-При `approve` — статус автоматически меняется на `Student`.
+При `approve` статус автоматически меняется на `Student`.
 
 **Headers:**
 ```
@@ -561,7 +559,7 @@ Authorization: Bearer <admin_token>
 
 ---
 
-#### POST `/admin/set-status/<user_id>/`
+### POST `/admin/set-status/<user_id>/`
 Назначить статус пользователю.
 
 **Headers:**
@@ -595,131 +593,10 @@ Authorization: Bearer <admin_token>
 
 ---
 
-#### POST `/admin/assign-group/<user_id>/`
-Добавить пользователя в учебную группу.
+## Массовая загрузка студентов
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
-
-**Body (JSON):**
-```json
-{ "group_id": "groups/AbCdEf..." }
-```
-
-**Успех — 200:**
-```json
-{
-    "message": "Пользователь добавлен в группу \"CS-101\".",
-    "user": {
-        "id": "users/mMplMaUG...",
-        "username": "john_doe",
-        "group": "CS-101",
-        ...
-    }
-}
-```
-
-**Ошибки:**
-```json
-// 400 — group_id не передан
-{ "error": "Поле \"group_id\" обязательно" }
-
-// 404 — группа не найдена
-{ "error": "Группа не найдена" }
-
-// 404 — пользователь не найден
-{ "error": "Пользователь не найден" }
-```
-
----
-
-### Группы
-
----
-
-#### GET `/admin/groups/`
-Список всех учебных групп.
-
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
-
-**Успех — 200:**
-```json
-{
-    "groups": [
-        { "id": "groups/AbCdEf...", "name": "CS-101" },
-        { "id": "groups/XyZwVu...", "name": "CS-102" }
-    ]
-}
-```
-
----
-
-#### POST `/admin/groups/create/`
-Создать новую учебную группу. Имя группы должно быть уникальным.
-
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
-
-**Body (JSON):**
-```json
-{ "name": "CS-101" }
-```
-
-**Успех — 201:**
-```json
-{
-    "message": "Группа \"CS-101\" создана.",
-    "group": { "id": "groups/AbCdEf...", "name": "CS-101" }
-}
-```
-
-**Ошибки:**
-```json
-// 400 — name не передан
-{ "error": "Поле \"name\" обязательно" }
-
-// 400 — имя уже занято
-{ "error": "Группа с именем \"CS-101\" уже существует" }
-```
-
----
-
-#### DELETE `/admin/groups/<group_id>/delete/`
-Удалить группу по ID.
-
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
-
-**Body:** не требуется
-
-**Успех — 200:**
-```json
-{ "message": "Группа \"CS-101\" удалена." }
-```
-
-**Ошибки:**
-```json
-// 404
-{ "error": "Группа не найдена" }
-```
-
----
-
-### Массовая загрузка студентов
-
----
-
-#### GET `/admin/students/import/template/`
-Скачать шаблон Excel для заполнения данных студентов.
+### GET `/admin/students/import/template/`
+Скачать шаблон Excel для заполнения.
 
 **Headers:**
 ```
@@ -728,21 +605,14 @@ Authorization: Bearer <admin_token>
 
 **Ответ:** файл `students_import_template.xlsx`
 
-Колонки шаблона:
-| Колонка | Обязательное |
-|---------|:---:|
-| ФИО | ❌ |
-| Email | ❌ |
-| Телефон | ❌ |
-| Дата рождения | ❌ |
-| Группа | ❌ |
+Колонки шаблона: `ФИО`, `Email`, `Телефон`, `Дата рождения`, `Группа`
 
-> Заголовки колонок распознаются автоматически на русском и английском языках.
+> Заголовки распознаются на русском и английском языках автоматически.
 
 ---
 
-#### POST `/admin/students/import/`
-Загрузить Excel-файл со студентами. Для каждой строки автоматически генерируется `username` и `password`.
+### POST `/admin/students/import/`
+Загрузить Excel-файл. Для каждой строки автоматически генерируется `username` и `password`.
 
 **Headers:**
 ```
@@ -756,33 +626,27 @@ Authorization: Bearer <admin_token>
 
 **Ответ:** файл `students_credentials.xlsx`
 
-Содержимое выходного файла:
-| № | ФИО | Email | Телефон | Группа | **Username** | **Password** | Статус | Примечание |
-|---|-----|-------|---------|--------|------------|------------|--------|------------|
-| 1 | Иванов Иван | ... | ... | CS-101 | ivan_4821 | Kd7mNpQ2xR | Успешно | |
-| 2 | ... | ... | ... | ... | ... | ... | Ошибка | описание |
+| № | ФИО | Email | Телефон | Группа | **Username** | **Password** | Статус |
+|---|-----|-------|---------|--------|------------|------------|--------|
+| 1 | Иванов Иван | ... | ... | CS-101 | ivan_4821 | Kd7mNpQ2xR | Успешно |
 
-- Строки зелёные — успешно, красные — ошибка
-- Username и Password выделены жирным
-- В конце файла итоговая строка
-
-> В Postman: Send → **Save Response → Save to file**
+> В Postman: **Send → Save Response → Save to file**
 
 **Ошибки (JSON):**
 ```json
 // 400 — файл не передан
 { "error": "Файл не передан. Используйте поле \"file\"" }
 
-// 400 — неверный формат файла
+// 400 — неверный формат
 { "error": "Разрешён только формат .xlsx" }
 
-// 400 — файл повреждён или не является Excel
+// 400 — повреждённый файл
 { "error": "Не удалось открыть файл. Убедитесь что это корректный .xlsx" }
 
-// 400 — файл пустой
+// 400 — пустой файл
 { "error": "Файл пустой или содержит только заголовок" }
 
-// 400 — не найдены известные заголовки
+// 400 — не найдены заголовки
 { "error": "Не найдены известные заголовки. Ожидаются: ФИО, Email, Телефон, Группа, Дата рождения" }
 ```
 
@@ -794,8 +658,8 @@ Authorization: Bearer <admin_token>
 |-----|----------|
 | 200 | Успех |
 | 201 | Создан |
-| 400 | Неверный запрос (ошибка валидации) |
-| 401 | Не авторизован (нет / истёк / отозван токен) |
-| 403 | Доступ запрещён (недостаточно прав) |
-| 404 | Ресурс не найден |
+| 400 | Неверный запрос |
+| 401 | Не авторизован |
+| 403 | Доступ запрещён |
+| 404 | Не найден |
 | 502 | Ошибка внешнего сервиса (Google Drive) |

@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "users",
+    "groups",
     "ebook_and_chat",
     "info",
 ]

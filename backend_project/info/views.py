@@ -4,7 +4,8 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from utils.decorators import admin_required, jwt_required
-from users.models import Group, User
+from users.models import User
+from groups.models import Group
 from .models import Schedule
 
 
