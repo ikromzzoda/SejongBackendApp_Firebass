@@ -5,6 +5,7 @@ from rest_framework import status
 
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_notification_image, delete_file
+from utils.fcm import send_notification_to_statuses
 from users.models import User
 from groups.models import Group
 from .models import Schedule, Notification
@@ -466,6 +467,10 @@ def admin_create_notification(request):
     notif.images          = images
     notif.target_statuses = list(dict.fromkeys(raw_statuses))  # deduplicate, preserve order
     notif.save()
+
+    title = (notif.title_rus or notif.title_eng or notif.title_taj or notif.title_kor or 'Уведомление')
+    body  = (notif.content_rus or notif.content_eng or notif.content_taj or notif.content_kor or '')
+    send_notification_to_statuses(notif.target_statuses, title, body)
 
     return Response(
         {'message': 'Уведомление создано', 'notification': _notif_dict(notif)},

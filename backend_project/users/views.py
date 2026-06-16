@@ -74,6 +74,7 @@ def register(request):
         'token': token,
         'status': user.status,
         'verification_status': user.verification_status,
+        'fcm_topic': f'status_{user.status}',
     }, status=status.HTTP_201_CREATED)
 
 
@@ -110,6 +111,7 @@ def login(request):
         'token': token,
         'status': user.status,
         'verification_status': user.verification_status,
+        'fcm_topic': f'status_{user.status}',
     })
 
 
