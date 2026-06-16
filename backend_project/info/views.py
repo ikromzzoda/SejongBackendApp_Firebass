@@ -4,9 +4,10 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from utils.decorators import admin_required, jwt_required
+from utils.drive import upload_notification_image, delete_file
 from users.models import User
 from groups.models import Group
-from .models import Schedule
+from .models import Schedule, Notification
 
 
 VALID_DAYS         = {0, 1, 2, 3, 4, 5, 6}
@@ -15,6 +16,15 @@ VALID_BOOKS        = set(range(1, 9))
 TIME_RE            = re.compile(r'^\d{2}:\d{2}$')
 DAY_NAMES          = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 MAX_DAYS_PER_GROUP = 6
+
+VALID_STATUSES    = {'Guest', 'Student', 'Teacher', 'Admin'}
+ALLOWED_IMG_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
+MAX_IMG_SIZE      = 2 * 1024 * 1024   # 2 МБ
+MAX_NOTIF_IMAGES  = 10
+NOTIF_LANG_FIELDS = (
+    'title_taj', 'title_rus', 'title_eng', 'title_kor',
+    'content_taj', 'content_rus', 'content_eng', 'content_kor',
+)
 
 
 # ---------------------------------------------------------------------------
@@ -345,4 +355,250 @@ def get_group_schedule(request, group_name):
             _schedule_dict(s, group.name or '', teachers_cache.get(s.teacher_id, ''))
             for s in schedules
         ],
+    })
+
+
+# ---------------------------------------------------------------------------
+# Notifications — helpers
+# ---------------------------------------------------------------------------
+
+def _notif_dict(n) -> dict:
+    return {
+        'id':              n.id,
+        'title_taj':       n.title_taj or '',
+        'title_rus':       n.title_rus or '',
+        'title_eng':       n.title_eng or '',
+        'title_kor':       n.title_kor or '',
+        'content_taj':     n.content_taj or '',
+        'content_rus':     n.content_rus or '',
+        'content_eng':     n.content_eng or '',
+        'content_kor':     n.content_kor or '',
+        'image_url':       n.image_url or '',
+        'images':          n.images or [],
+        'target_statuses': n.target_statuses or [],
+        'created_at':      str(n.created_at) if n.created_at else '',
+    }
+
+
+def _parse_statuses(data) -> list:
+    """Extracts target_statuses from both JSON (dict) and multipart (QueryDict) request data."""
+    if hasattr(data, 'getlist'):
+        return data.getlist('target_statuses')
+    raw = data.get('target_statuses', [])
+    return [raw] if isinstance(raw, str) else (list(raw) if isinstance(raw, list) else [])
+
+
+def _upload_notif_images(files) -> tuple[list, 'Response | None']:
+    uploaded = []
+    for f in files:
+        if f.content_type not in ALLOWED_IMG_TYPES:
+            for item in uploaded:
+                delete_file(item['file_id'])
+            return [], Response(
+                {'error': 'Допустимые форматы изображений: JPEG, PNG, WEBP'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if f.size > MAX_IMG_SIZE:
+            for item in uploaded:
+                delete_file(item['file_id'])
+            return [], Response(
+                {'error': 'Изображение слишком большое. Максимум 2 МБ'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ext = f.name.rsplit('.', 1)[-1] if '.' in f.name else 'jpg'
+        try:
+            file_id, url = upload_notification_image(
+                f, f'notification_{len(uploaded)}.{ext}', f.content_type
+            )
+        except Exception as e:
+            for item in uploaded:
+                delete_file(item['file_id'])
+            return [], Response(
+                {'error': f'Ошибка загрузки изображения: {e}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        uploaded.append({'file_id': file_id, 'url': url})
+    return uploaded, None
+
+
+# ---------------------------------------------------------------------------
+# Notifications — Admin endpoints
+# ---------------------------------------------------------------------------
+
+@api_view(['POST'])
+@admin_required
+def admin_create_notification(request):
+    data = request.data
+
+    if not any(str(data.get(f'title_{lang}') or '').strip() for lang in ('taj', 'rus', 'eng', 'kor')):
+        return Response(
+            {'error': 'Хотя бы одно поле заголовка обязательно (title_taj / title_rus / title_eng / title_kor)'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    raw_statuses = _parse_statuses(data)
+    if not raw_statuses:
+        return Response(
+            {'error': 'Поле "target_statuses" обязательно. Укажите хотя бы один статус.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    invalid = [s for s in raw_statuses if s not in VALID_STATUSES]
+    if invalid:
+        return Response(
+            {'error': f'Недопустимые статусы: {invalid}. Допустимые: {sorted(VALID_STATUSES)}'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    image_files = request.FILES.getlist('images')
+    if len(image_files) > MAX_NOTIF_IMAGES:
+        return Response(
+            {'error': f'Максимум {MAX_NOTIF_IMAGES} изображений'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    images, err = _upload_notif_images(image_files)
+    if err:
+        return err
+
+    notif = Notification()
+    for field in NOTIF_LANG_FIELDS:
+        setattr(notif, field, str(data.get(field) or '').strip())
+    notif.image_url       = str(data.get('image_url') or '').strip()
+    notif.images          = images
+    notif.target_statuses = list(dict.fromkeys(raw_statuses))  # deduplicate, preserve order
+    notif.save()
+
+    return Response(
+        {'message': 'Уведомление создано', 'notification': _notif_dict(notif)},
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['GET'])
+@admin_required
+def admin_list_notifications(request):
+    filter_status = request.GET.get('status', '').strip()
+    if filter_status:
+        if filter_status not in VALID_STATUSES:
+            return Response(
+                {'error': f'Недопустимый статус: "{filter_status}". Допустимые: {sorted(VALID_STATUSES)}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        notifications = list(
+            Notification.collection.filter('target_statuses', 'array_contains', filter_status).fetch(500)
+        )
+    else:
+        notifications = list(Notification.collection.fetch(500))
+
+    notifications.sort(key=lambda n: str(n.created_at or ''), reverse=True)
+    return Response({
+        'total':         len(notifications),
+        'notifications': [_notif_dict(n) for n in notifications],
+    })
+
+
+@api_view(['GET'])
+@admin_required
+def admin_get_notification(request, notif_id):
+    try:
+        notif = Notification.collection.get(f'notifications/{notif_id}')
+    except Exception:
+        notif = None
+    if not notif:
+        return Response({'error': 'Уведомление не найдено'}, status=status.HTTP_404_NOT_FOUND)
+    return Response({'notification': _notif_dict(notif)})
+
+
+@api_view(['PATCH'])
+@admin_required
+def admin_edit_notification(request, notif_id):
+    try:
+        notif = Notification.collection.get(f'notifications/{notif_id}')
+    except Exception:
+        notif = None
+    if not notif:
+        return Response({'error': 'Уведомление не найдено'}, status=status.HTTP_404_NOT_FOUND)
+
+    data           = request.data
+    updated_fields = []
+
+    for field in NOTIF_LANG_FIELDS:
+        if field in data:
+            setattr(notif, field, str(data[field] or '').strip())
+            updated_fields.append(field)
+
+    if 'image_url' in data:
+        notif.image_url = str(data['image_url'] or '').strip()
+        updated_fields.append('image_url')
+
+    raw_statuses = _parse_statuses(data)
+    if raw_statuses:
+        invalid = [s for s in raw_statuses if s not in VALID_STATUSES]
+        if invalid:
+            return Response(
+                {'error': f'Недопустимые статусы: {invalid}. Допустимые: {sorted(VALID_STATUSES)}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        notif.target_statuses = list(dict.fromkeys(raw_statuses))
+        updated_fields.append('target_statuses')
+
+    image_files = request.FILES.getlist('images')
+    if image_files:
+        if len(image_files) > MAX_NOTIF_IMAGES:
+            return Response(
+                {'error': f'Максимум {MAX_NOTIF_IMAGES} изображений'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        for item in (notif.images or []):
+            delete_file(item.get('file_id', ''))
+        new_images, err = _upload_notif_images(image_files)
+        if err:
+            return err
+        notif.images = new_images
+        updated_fields.append('images')
+
+    if not updated_fields:
+        return Response({'message': 'Нет данных для обновления'}, status=status.HTTP_400_BAD_REQUEST)
+
+    notif.update()
+    return Response({
+        'message':        'Уведомление обновлено',
+        'updated_fields': updated_fields,
+        'notification':   _notif_dict(notif),
+    })
+
+
+@api_view(['DELETE'])
+@admin_required
+def admin_delete_notification(request, notif_id):
+    try:
+        notif = Notification.collection.get(f'notifications/{notif_id}')
+    except Exception:
+        notif = None
+    if not notif:
+        return Response({'error': 'Уведомление не найдено'}, status=status.HTTP_404_NOT_FOUND)
+
+    for item in (notif.images or []):
+        delete_file(item.get('file_id', ''))
+    Notification.collection.delete(f'notifications/{notif_id}')
+    return Response({'message': 'Уведомление удалено'})
+
+
+# ---------------------------------------------------------------------------
+# Notifications — Authenticated user endpoint
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@jwt_required
+def get_my_notifications(request):
+    user_status = request.user_payload.get('status', '')
+    if not user_status:
+        return Response({'error': 'Статус пользователя не определён'}, status=status.HTTP_400_BAD_REQUEST)
+
+    notifications = list(
+        Notification.collection.filter('target_statuses', 'array_contains', user_status).fetch(200)
+    )
+    notifications.sort(key=lambda n: str(n.created_at or ''), reverse=True)
+    return Response({
+        'total':         len(notifications),
+        'notifications': [_notif_dict(n) for n in notifications],
     })

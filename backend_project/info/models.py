@@ -1,5 +1,5 @@
 from fireo.models import Model
-from fireo.fields import TextField, DateTime, NumberField
+from fireo.fields import TextField, DateTime, NumberField, ListField
 
 
 class Schedule(Model):
@@ -14,3 +14,21 @@ class Schedule(Model):
 
     class Meta:
         collection_name = 'schedules'
+
+
+class Notification(Model):
+    title_taj       = TextField()
+    title_rus       = TextField()
+    title_eng       = TextField()
+    title_kor       = TextField()
+    content_taj     = TextField()
+    content_rus     = TextField()
+    content_eng     = TextField()
+    content_kor     = TextField()
+    image_url       = TextField()   # single cover/thumbnail URL (optional)
+    images          = ListField()   # [{"file_id": str, "url": str}, ...]
+    target_statuses = ListField()   # e.g. ["Student", "Teacher"]
+    created_at      = DateTime(auto=True)
+
+    class Meta:
+        collection_name = 'notifications'

@@ -570,11 +570,11 @@ def change_avatar(request):
 # ---------------------------------------------------------------------------
 
 _COL_ALIASES = {
-    'fullname':      ['fullname', 'фио', 'ф.и.о', 'ф.и.о.', 'имя', 'полное имя', 'full name', 'name', 'имя фамилия'],
-    'email':         ['email', 'почта', 'e-mail', 'эл. почта', 'электронная почта'],
-    'phone_number':  ['phone', 'phone_number', 'телефон', 'номер', 'номер телефона', 'моб', 'моб.', 'тел'],
-    'date_of_birth': ['date_of_birth', 'дата рождения', 'дата', 'birth', 'д.р.', 'день рождения'],
-    'group':         ['group', 'группа', 'учебная группа', 'класс'],
+    'fullname':      ['Full Name', 'фио', 'ф.и.о', 'ф.и.о.', 'имя', 'полное имя', 'full name', 'name', 'имя фамилия'],
+    'email':         ['email', 'Email', 'почта', 'e-mail', 'эл. почта', 'электронная почта'],
+    'phone_number':  ['Phone Number', 'phone_number', 'телефон', 'номер', 'номер телефона', 'моб', 'моб.', 'тел'],
+    'date_of_birth': ['Date of Birth/생년월일', 'дата рождения', 'дата', 'birth', 'д.р.', 'день рождения'],
+    'group':         ['Group', 'группа', 'учебная группа', 'класс'],
 }
 
 _TRANSLIT = {
@@ -686,7 +686,7 @@ def admin_bulk_import(request):
 
         fullname      = get('fullname')
         email         = get('email')
-        phone_number  = get('phone_number')
+        phone_number  = re.sub(r'[^\d+]', '', get('phone_number'))
         date_of_birth = get('date_of_birth')
         group_name    = get('group')
 

@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "groups",
     "ebook_and_chat",
     "info",
+    "announcments",
 ]
 
 MIDDLEWARE = [

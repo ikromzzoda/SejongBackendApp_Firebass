@@ -114,3 +114,21 @@ def delete_file(file_id: str) -> None:
         _get_service().files().delete(fileId=file_id).execute()
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Объявления
+# ---------------------------------------------------------------------------
+
+def upload_announcement_image(file_obj, filename: str, mime_type: str) -> tuple[str, str]:
+    """Загрузить изображение объявления. Возвращает (file_id, public_url)."""
+    return _upload_to_path(file_obj, 'Sejong Cloud/announcement/images', filename, mime_type)
+
+
+# ---------------------------------------------------------------------------
+# Уведомления
+# ---------------------------------------------------------------------------
+
+def upload_notification_image(file_obj, filename: str, mime_type: str) -> tuple[str, str]:
+    """Загрузить изображение уведомления. Возвращает (file_id, public_url)."""
+    return _upload_to_path(file_obj, 'Sejong Cloud/notifications/images', filename, mime_type)
