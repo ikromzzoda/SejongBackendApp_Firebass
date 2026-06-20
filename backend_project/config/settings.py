@@ -16,14 +16,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Переменные окружения из backend_project/.env
 load_dotenv(BASE_DIR / ".env")
 
-SECRET_KEY = os.getenv(
-    "SECRET_KEY",
-    "django-insecure-q7h@u9ag13!(qb=)#uip@voq!wks4j9p@#z2s_arz4$!q!w#=n",
-)
+SECRET_KEY = os.getenv("SECRET_KEY")
 
-DEBUG = os.getenv("DEBUG", "True").lower() in ("1", "true", "yes")
+DEBUG = False  # В продакшене всегда False! В .env можно переопределить на True для локальной разработки
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
+
+SECURE_SSL_REDIRECT = True
+
+SECURE_PROXY_SSL_HEADER = (
+    'HTTP_X_FORWARDED_PROTO',
+    'https'
+)
 
 # --- Firebase / Firestore -------------------------------------------------
 
