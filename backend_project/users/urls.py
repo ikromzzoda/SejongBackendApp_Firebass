@@ -20,6 +20,7 @@ urlpatterns = [
     path('admin/students/import/template/',       views.admin_bulk_import_template, name='admin-bulk-import-template'),
 
     # Profile
+    path('profile/',        views.get_profile,    name='profile-get'),
     path('profile/update/', views.update_profile, name='profile-update'),
     path('profile/avatar/', views.change_avatar,  name='profile-avatar'),
 ]

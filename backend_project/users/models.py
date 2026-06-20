@@ -25,6 +25,7 @@ class User(Model):
     avatar        = TextField(default=DEFAULT_AVATAR)
     avatar_id     = TextField()
     date_joined   = DateTime(auto=True)
+    device_token   = TextField()
 
     VERIFICATION_CHOICES = (
         ('Pending',  'Pending'),

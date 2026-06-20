@@ -1,8 +1,43 @@
-Django>=6.0,<7.0
-djangorestframework>=3.17
-django-cors-headers>=4.9
-fireo>=2.2,<3.0
-python-dotenv>=1.2
-PyJWT>=2.8
-google-api-python-client>=2.0
-google-auth>=2.0
+# Web framework
+Django==6.0.6
+djangorestframework==3.17.1
+django-cors-headers==4.9.0
+
+# Production WSGI server & static files
+gunicorn==23.0.0
+whitenoise==6.9.0
+
+# Auth & Security
+PyJWT==2.13.0
+cryptography==49.0.0
+
+# Firebase / Firestore
+# fireo requires google-cloud-firestore==2.11.1 exactly — do not upgrade
+fireo==2.2.2
+google-cloud-firestore==2.11.1
+
+# Google APIs (Drive, Auth, FCM via HTTP v1)
+google-api-python-client==2.197.0
+google-auth==2.55.0
+google-auth-httplib2==0.4.0
+google-api-core==2.30.3
+google-cloud-core==2.6.0
+google-cloud-storage==3.12.0
+googleapis-common-protos==1.75.0
+google-crc32c==1.8.0
+google-resumable-media==2.10.0
+
+# gRPC (required by Firestore / Google APIs)
+grpcio==1.81.1
+grpcio-status==1.62.3
+protobuf==4.25.9
+
+# HTTP clients
+requests==2.34.2
+httpx==0.28.1
+
+# Excel export
+openpyxl==3.1.5
+
+# Environment variables
+python-dotenv==1.2.2

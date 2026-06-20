@@ -22,30 +22,49 @@ def _get_project_id() -> str:
 
 
 def send_notification_to_statuses(target_statuses: list, title: str, body: str) -> None:
-    """Send FCM push to all devices subscribed to the given status topics.
-    Uses Firebase HTTP v1 API — no firebase-admin SDK required.
-    Errors are silenced so a FCM failure never blocks notification creation.
+    """Отправить FCM push-уведомление всем пользователям с указанными статусами.
+    Собирает device_token из Firestore и отправляет каждому индивидуально.
+    Ошибки FCM не блокируют создание уведомления.
     """
+    from users.models import User
+
+    # Собираем device_token всех подходящих пользователей
+    tokens: set[str] = set()
+    for st in target_statuses:
+        for u in User.collection.filter('status', '==', st).fetch(1000):
+            if u.device_token:
+                tokens.add(u.device_token)
+
+    if not tokens:
+        return
+
     try:
-        token = _get_access_token()
-        project_id = _get_project_id()
+        access_token = _get_access_token()
+        project_id   = _get_project_id()
     except Exception:
         return
 
-    url = f'https://fcm.googleapis.com/v1/projects/{project_id}/messages:send'
+    url     = f'https://fcm.googleapis.com/v1/projects/{project_id}/messages:send'
     headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type':  'application/json',
     }
 
-    for user_status in target_statuses:
-        topic = f'status_{user_status}'   # status_Student, status_Teacher, etc.
+    for device_token in tokens:
         payload = {
             'message': {
-                'topic': topic,
+                'token': device_token,
                 'notification': {
                     'title': title,
-                    'body': body,
+                    'body':  body,
+                },
+                'android': {
+                    'priority': 'high',
+                },
+                'apns': {
+                    'payload': {
+                        'aps': {'sound': 'default'},
+                    },
                 },
             }
         }

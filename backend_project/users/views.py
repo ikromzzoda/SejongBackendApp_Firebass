@@ -99,6 +99,11 @@ def login(request):
 
     user = users[0]
 
+    device_token = data.get('device_token', '').strip()
+    if device_token and device_token != (user.device_token or ''):
+        user.device_token = device_token
+        user.update()
+
     token = generate_token(
         user_id=user.id,
         username=user.username,
@@ -111,7 +116,6 @@ def login(request):
         'token': token,
         'status': user.status,
         'verification_status': user.verification_status,
-        'fcm_topic': f'status_{user.status}',
     })
 
 
@@ -134,6 +138,36 @@ def logout(request):
     bt.save()
 
     return Response({'message': 'Выход выполнен'})
+
+
+# ---------------------------------------------------------------------------
+# Profile — get my data
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@jwt_required
+def get_profile(request):
+    user_id = request.user_payload.get('user_id', '')
+    try:
+        user = User.collection.get(f'users/{user_id}')
+    except Exception:
+        user = None
+    if not user:
+        return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
+
+    return Response({
+        'id':                  user.id,
+        'username':            user.username or '',
+        'fullname':            user.fullname or '',
+        'email':               user.email or '',
+        'phone_number':        user.phone_number or '',
+        'date_of_birth':       user.date_of_birth or '',
+        'status':              user.status or '',
+        'verification_status': user.verification_status or '',
+        'group_id':            user.group or '',
+        'avatar':              user.avatar or '',
+        'date_joined':         str(user.date_joined) if user.date_joined else '',
+    })
 
 
 # ---------------------------------------------------------------------------
