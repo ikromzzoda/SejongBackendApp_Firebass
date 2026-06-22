@@ -4,7 +4,11 @@ from rest_framework import status
 
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_announcement_image, delete_file
+from utils.fcm import send_notification_to_statuses
+from info.models import Notification
 from .models import Announcement
+
+_ALL_STATUSES = ['Guest', 'Student', 'Teacher', 'Admin']
 
 ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
 MAX_IMAGE_SIZE = 2 * 1024 * 1024   # 2 МБ
@@ -93,6 +97,20 @@ def admin_create_announcement(request):
     ann.images = images
     ann.author = request.user_payload.get('username', '')
     ann.save()
+
+    # Automatically create a Notification and push it to all users
+    notif = Notification()
+    for field in ('title_taj', 'title_rus', 'title_eng', 'title_kor',
+                  'content_taj', 'content_rus', 'content_eng', 'content_kor'):
+        setattr(notif, field, getattr(ann, field) or '')
+    notif.image_url = images[0]['url'] if images else ''
+    notif.images = images
+    notif.target_statuses = _ALL_STATUSES
+    notif.save()
+
+    title = (ann.title_rus or ann.title_eng or ann.title_taj or ann.title_kor or 'Объявление')
+    body  = (ann.content_rus or ann.content_eng or ann.content_taj or ann.content_kor or '')
+    send_notification_to_statuses(_ALL_STATUSES, title, body)
 
     return Response(
         {'message': 'Объявление успешно создано', 'announcement': _ann_dict(ann)},

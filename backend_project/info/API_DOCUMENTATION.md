@@ -4,17 +4,15 @@
 
 ---
 
-## Общее
+## Аутентификация
 
-### Аутентификация
 ```
 Authorization: Bearer <token>
 ```
 
-### Права доступа
-| Тип | Эндпоинты |
-|-----|-----------|
-| `Admin` | Все эндпоинты `/admin/*` |
+| Уровень доступа | Эндпоинты |
+|-----------------|-----------|
+| Admin | Все `/admin/*` |
 | Любой авторизованный | `GET /schedules/*`, `GET /notifications/` |
 
 ```json
@@ -27,65 +25,82 @@ Authorization: Bearer <token>
 
 ---
 
+## Обзор эндпоинтов
+
+| Метод | URL | Доступ | Описание |
+|-------|-----|--------|----------|
+| POST | `/admin/schedules/create/` | Admin | Создать расписание |
+| GET | `/admin/schedules/` | Admin | Список всех расписаний |
+| GET | `/admin/schedules/<id>/` | Admin | Получить расписание |
+| PATCH | `/admin/schedules/<id>/edit/` | Admin | Редактировать расписание |
+| DELETE | `/admin/schedules/<id>/delete/` | Admin | Удалить расписание |
+| GET | `/schedules/all/` | Авторизованный | Все расписания |
+| GET | `/schedules/group/<group_name>/` | Авторизованный | Расписание группы |
+| POST | `/admin/notifications/create/` | Admin | Создать уведомление + FCM push |
+| GET | `/admin/notifications/` | Admin | Список уведомлений |
+| GET | `/admin/notifications/<id>/` | Admin | Получить уведомление |
+| PATCH | `/admin/notifications/<id>/edit/` | Admin | Редактировать уведомление |
+| DELETE | `/admin/notifications/<id>/delete/` | Admin | Удалить уведомление |
+| GET | `/notifications/` | Авторизованный | Мои уведомления |
+
+---
+
 ## Расписание
 
 ### Объект расписания
+
 ```json
 {
-    "id": "schedules/AbCdEf123...",
+    "id": "schedules/AbCdEf123",
     "day": 0,
     "day_name": "Monday",
     "start_time": "09:00",
     "end_time": "11:00",
     "classroom": 301,
     "group_name": "CS-101",
-    "teacher_name": "John Smith",
+    "teacher_name": "Иванов Иван",
     "book": 3,
-    "created_at": "2025-01-15 10:30:00"
+    "created_at": "2026-01-15 10:30:00"
 }
 ```
 
-| Поле | Значения |
-|------|----------|
-| `day` | `0`=Monday, `1`=Tuesday, ..., `6`=Sunday |
+| Поле | Допустимые значения |
+|------|---------------------|
+| `day` | `0`=Monday, `1`=Tuesday, `2`=Wednesday, `3`=Thursday, `4`=Friday, `5`=Saturday, `6`=Sunday |
 | `classroom` | `301`, `303`, `306`, `307`, `308` |
 | `book` | `1` – `8` |
 
 ---
 
 ### POST `/admin/schedules/create/`
-Создать расписание для группы.
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
+Создать расписание для группы. В одной группе не может быть двух занятий в один день; максимум 6 учебных дней на группу.
 
 **Body (JSON):**
+
+| Поле | Тип | Обязательное | Описание |
+|------|-----|:---:|----------|
+| `day` | int | ✅ | 0–6 (Пн–Вс) |
+| `start_time` | string | ✅ | Формат `HH:MM` |
+| `end_time` | string | ✅ | Формат `HH:MM`, должно быть позже `start_time` |
+| `classroom` | int | ✅ | 301, 303, 306, 307, 308 |
+| `group_name` | string | ✅ | Название группы |
+| `teacher_name` | string | ✅ | ФИО преподавателя |
+| `book` | int | ✅ | 1–8 |
+
 ```json
+// Запрос
 {
     "day": 1,
     "start_time": "09:00",
     "end_time": "11:00",
     "classroom": 301,
     "group_name": "CS-101",
-    "teacher_name": "John Smith",
+    "teacher_name": "Иванов Иван",
     "book": 3
 }
-```
 
-| Поле | Тип | Обязательное | Описание |
-|------|-----|:---:|----------|
-| `day` | int | ✅ | 0–6 (Пн–Вс) |
-| `start_time` | string | ✅ | Формат `HH:MM` |
-| `end_time` | string | ✅ | Формат `HH:MM` |
-| `classroom` | int | ✅ | 301, 303, 306, 307, 308 |
-| `group_name` | string | ✅ | Имя группы |
-| `teacher_name` | string | ✅ | ФИО преподавателя |
-| `book` | int | ✅ | 1–8 |
-
-**Успех — 201:**
-```json
+// 201 — успех
 {
     "message": "Расписание создано",
     "schedule": { ... }
@@ -93,53 +108,34 @@ Authorization: Bearer <admin_token>
 ```
 
 **Ошибки:**
-```json
-// 400 — обязательное поле не передано
-{ "error": "Поле \"day\" обязательно" }
 
-// 400 — день вне диапазона
-{ "error": "Поле \"day\" должно быть от 0 (Monday) до 6 (Sunday)" }
-
-// 400 — неверная аудитория
-{ "error": "Неверная аудитория. Допустимые: [301, 303, 306, 307, 308]" }
-
-// 400 — неверный формат времени
-{ "error": "\"start_time\" должно быть в формате HH:MM" }
-
-// 400 — end_time <= start_time
-{ "error": "\"start_time\" должно быть раньше \"end_time\"" }
-
-// 400 — у группы уже есть занятие в этот день
-{ "error": "У группы уже есть занятие в Tuesday. Нельзя добавить два занятия в один день." }
-
-// 400 — достигнут максимум дней
-{ "error": "Группа уже имеет максимальное количество учебных дней (6)." }
-
-// 404 — группа не найдена
-{ "error": "Группа \"CS-999\" не найдена" }
-
-// 404 — преподаватель не найден
-{ "error": "Учитель \"Петров П.П.\" не найден" }
-```
+| Код | Описание | Ответ |
+|-----|----------|-------|
+| 400 | Обязательное поле не передано | `{"error": "Поле \"day\" обязательно"}` |
+| 400 | Неверный день | `{"error": "Поле \"day\" должно быть от 0 (Monday) до 6 (Sunday)"}` |
+| 400 | Неверная аудитория | `{"error": "Неверная аудитория. Допустимые: [301, 303, 306, 307, 308]"}` |
+| 400 | Неверный формат времени | `{"error": "\"start_time\" должно быть в формате HH:MM"}` |
+| 400 | start_time ≥ end_time | `{"error": "\"start_time\" должно быть раньше \"end_time\""}` |
+| 400 | Занятие в этот день уже есть | `{"error": "У группы уже есть занятие в Tuesday. Нельзя добавить два занятия в один день."}` |
+| 400 | Достигнут максимум дней | `{"error": "Группа уже имеет максимальное количество учебных дней (6)."}` |
+| 404 | Группа не найдена | `{"error": "Группа \"CS-999\" не найдена"}` |
+| 404 | Преподаватель не найден | `{"error": "Учитель \"Петров П.П.\" не найден"}` |
 
 ---
 
 ### GET `/admin/schedules/`
-Список всех расписаний. Поддерживает фильтрацию.
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
+Список всех расписаний. Можно фильтровать по группе или преподавателю (только один параметр за раз).
 
-**Query параметры (необязательные, только один за раз):**
+**Query параметры (необязательные):**
+
 | Параметр | Пример |
 |----------|--------|
 | `group_name` | `?group_name=CS-101` |
-| `teacher_name` | `?teacher_name=John Smith` |
+| `teacher_name` | `?teacher_name=Иванов Иван` |
 
-**Успех — 200:**
 ```json
+// 200 — успех
 {
     "total": 15,
     "schedules": [ { ... } ]
@@ -149,22 +145,13 @@ Authorization: Bearer <admin_token>
 ---
 
 ### GET `/admin/schedules/<schedule_id>/`
-Получить одно расписание.
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
+Получить одно расписание по ID.
 
-**Успех — 200:**
 ```json
-{
-    "schedule": { ... }
-}
-```
+// 200 — успех
+{ "schedule": { ... } }
 
-**Ошибки:**
-```json
 // 404
 { "error": "Расписание не найдено" }
 ```
@@ -172,14 +159,11 @@ Authorization: Bearer <admin_token>
 ---
 
 ### PATCH `/admin/schedules/<schedule_id>/edit/`
-Изменить расписание. Все поля необязательные.
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
+Изменить расписание. Передаются только изменяемые поля.
 
-**Body (JSON):**
+**Body (JSON, все поля необязательные):**
+
 ```json
 {
     "day": 2,
@@ -187,13 +171,11 @@ Authorization: Bearer <admin_token>
     "end_time": "12:00",
     "classroom": 303,
     "group_name": "CS-102",
-    "teacher_name": "Jane Doe",
+    "teacher_name": "Петрова Мария",
     "book": 5
 }
-```
 
-**Успех — 200:**
-```json
+// 200 — успех
 {
     "message": "Расписание обновлено",
     "updated_fields": ["day", "classroom"],
@@ -202,30 +184,22 @@ Authorization: Bearer <admin_token>
 ```
 
 **Ошибки:**
-```json
-// 400 — нет данных для обновления
-{ "error": "Нет данных для обновления" }
 
-// 400, 404 — те же что и при создании
-```
+| Код | Описание |
+|-----|----------|
+| 400 | Нет данных для обновления / неверные значения полей |
+| 404 | Расписание / группа / преподаватель не найдены |
 
 ---
 
 ### DELETE `/admin/schedules/<schedule_id>/delete/`
+
 Удалить расписание.
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
-
-**Успех — 200:**
 ```json
+// 200 — успех
 { "message": "Расписание удалено" }
-```
 
-**Ошибки:**
-```json
 // 404
 { "error": "Расписание не найдено" }
 ```
@@ -233,15 +207,11 @@ Authorization: Bearer <admin_token>
 ---
 
 ### GET `/schedules/all/`
-Все расписания (для авторизованных пользователей). Отсортированы по дню и времени.
 
-**Headers:**
-```
-Authorization: Bearer <token>
-```
+Все расписания для авторизованного пользователя. Отсортированы по дню недели и времени начала.
 
-**Успех — 200:**
 ```json
+// 200 — успех
 {
     "total": 15,
     "schedules": [ { ... } ]
@@ -251,25 +221,18 @@ Authorization: Bearer <token>
 ---
 
 ### GET `/schedules/group/<group_name>/`
-Расписание конкретной группы. Отсортировано по дням недели.
 
-**Headers:**
-```
-Authorization: Bearer <token>
-```
+Расписание конкретной группы, отсортированное по дням недели.
 
 **Пример:** `GET /api/info/schedules/group/CS-101/`
 
-**Успех — 200:**
 ```json
+// 200 — успех
 {
     "group_name": "CS-101",
     "schedules": [ { ... } ]
 }
-```
 
-**Ошибки:**
-```json
 // 404
 { "error": "Группа \"CS-999\" не найдена" }
 ```
@@ -279,9 +242,10 @@ Authorization: Bearer <token>
 ## Уведомления
 
 ### Объект уведомления
+
 ```json
 {
-    "id": "notifications/XyZaBc...",
+    "id": "notifications/XyZaBc",
     "title_taj": "Огоҳнома",
     "title_rus": "Объявление",
     "title_eng": "Announcement",
@@ -292,40 +256,40 @@ Authorization: Bearer <token>
     "content_kor": "내용 ...",
     "image_url": "https://drive.google.com/uc?id=...",
     "images": [
-        { "file_id": "1AbCdEfG...", "url": "https://drive.google.com/uc?id=..." }
+        { "file_id": "1AbCdEfG", "url": "https://drive.google.com/uc?id=1AbCdEfG" }
     ],
     "target_statuses": ["Student", "Teacher"],
-    "created_at": "2025-01-15 10:30:00"
+    "created_at": "2026-01-15 10:30:00"
 }
 ```
 
-> Поля `title_*` и `content_*` — мультиязычные. `taj`=таджикский, `rus`=русский, `eng`=английский, `kor`=корейский.
+> Поля `title_*` / `content_*` — мультиязычные: `taj`=таджикский, `rus`=русский, `eng`=английский, `kor`=корейский.  
+> `image_url` — URL обложки (одно изображение).  
+> `images` — дополнительные изображения, загруженные на Google Drive.  
+> `target_statuses` — допустимые значения: `Guest`, `Student`, `Teacher`, `Admin`.
 
 ---
 
 ### POST `/admin/notifications/create/`
-Создать уведомление. После создания бэкенд автоматически:
-1. Сохраняет уведомление в Firestore
-2. Находит всех пользователей с указанными статусами
-3. Отправляет FCM push-уведомление на их `device_token`
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
+Создать уведомление. После сохранения бэкенд автоматически:
+1. Находит `device_token` всех пользователей с указанными статусами
+2. Отправляет FCM push-уведомление на каждый токен
 
 **Вариант A — JSON (без загрузки изображений):**
+
 ```
 Content-Type: application/json
 ```
+
 ```json
 {
     "title_rus": "Важное объявление",
     "title_eng": "Important announcement",
     "content_rus": "Занятия отменены",
     "content_eng": "Classes are cancelled",
-    "target_statuses": ["Student", "Teacher"],
-    "image_url": "https://example.com/banner.jpg"
+    "image_url": "https://example.com/banner.jpg",
+    "target_statuses": ["Student", "Teacher"]
 }
 ```
 
@@ -342,13 +306,13 @@ Content-Type: application/json
 | `content_eng` | string | ❌ | Текст (английский) |
 | `content_kor` | string | ❌ | Текст (корейский) |
 | `image_url` | string | ❌ | URL обложки |
-| `images` | File[] | ❌ | JPEG/PNG/WEBP, до 2 МБ, максимум 10 |
-| `target_statuses` | string[] | ✅ | Список статусов — `Student`, `Teacher`, `Admin`, `Guest` |
+| `images` | File[] | ❌ | JPEG / PNG / WEBP, до 2 МБ каждый, максимум 10 файлов |
+| `target_statuses` | string[] | ✅ | `Guest`, `Student`, `Teacher`, `Admin` |
 
 > Хотя бы одно поле `title_*` обязательно.
 
-**Успех — 201:**
 ```json
+// 201 — успех
 {
     "message": "Уведомление создано",
     "notification": { ... }
@@ -356,54 +320,36 @@ Content-Type: application/json
 ```
 
 **Ошибки:**
-```json
-// 400 — нет заголовка
-{ "error": "Хотя бы одно поле заголовка обязательно (title_taj / title_rus / title_eng / title_kor)" }
 
-// 400 — не указаны target_statuses
-{ "error": "Поле \"target_statuses\" обязательно. Укажите хотя бы один статус." }
-
-// 400 — недопустимый статус
-{ "error": "Недопустимые статусы: [\"Unknown\"]. Допустимые: ['Admin', 'Guest', 'Student', 'Teacher']" }
-
-// 400 — превышен лимит изображений
-{ "error": "Максимум 10 изображений" }
-
-// 400 — недопустимый формат изображения
-{ "error": "Допустимые форматы изображений: JPEG, PNG, WEBP" }
-
-// 400 — изображение слишком большое
-{ "error": "Изображение слишком большое. Максимум 2 МБ" }
-
-// 502 — ошибка загрузки
-{ "error": "Ошибка загрузки изображения: ..." }
-```
+| Код | Описание | Ответ |
+|-----|----------|-------|
+| 400 | Нет ни одного заголовка | `{"error": "Хотя бы одно поле заголовка обязательно (title_taj / title_rus / title_eng / title_kor)"}` |
+| 400 | `target_statuses` не передан | `{"error": "Поле \"target_statuses\" обязательно. Укажите хотя бы один статус."}` |
+| 400 | Недопустимый статус | `{"error": "Недопустимые статусы: [\"Unknown\"]. Допустимые: ['Admin', 'Guest', 'Student', 'Teacher']"}` |
+| 400 | Превышен лимит изображений | `{"error": "Максимум 10 изображений"}` |
+| 400 | Недопустимый формат | `{"error": "Допустимые форматы изображений: JPEG, PNG, WEBP"}` |
+| 400 | Изображение слишком большое | `{"error": "Изображение слишком большое. Максимум 2 МБ"}` |
+| 502 | Ошибка загрузки на Google Drive | `{"error": "Ошибка загрузки изображения: ..."}` |
 
 ---
 
 ### GET `/admin/notifications/`
-Список всех уведомлений. Отсортированы от новых к старым.
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
+Список всех уведомлений, отсортированных от новых к старым.
 
 **Query параметры (необязательные):**
+
 | Параметр | Пример | Описание |
 |----------|--------|----------|
 | `status` | `?status=Student` | Фильтр по целевому статусу |
 
-**Успех — 200:**
 ```json
+// 200 — успех
 {
     "total": 10,
     "notifications": [ { ... } ]
 }
-```
 
-**Ошибки:**
-```json
 // 400 — недопустимый статус
 { "error": "Недопустимый статус: \"Unknown\". Допустимые: ['Admin', 'Guest', 'Student', 'Teacher']" }
 ```
@@ -411,22 +357,13 @@ Authorization: Bearer <admin_token>
 ---
 
 ### GET `/admin/notifications/<notif_id>/`
-Получить одно уведомление.
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
+Получить одно уведомление по ID.
 
-**Успех — 200:**
 ```json
-{
-    "notification": { ... }
-}
-```
+// 200 — успех
+{ "notification": { ... } }
 
-**Ошибки:**
-```json
 // 404
 { "error": "Уведомление не найдено" }
 ```
@@ -434,27 +371,24 @@ Authorization: Bearer <admin_token>
 ---
 
 ### PATCH `/admin/notifications/<notif_id>/edit/`
-Изменить уведомление. Все поля необязательные.
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
+Изменить уведомление. Передаются только изменяемые поля.
 
-**Body (JSON или multipart/form-data):**
+> При передаче новых `images` — старые изображения удаляются с Google Drive и заменяются новыми.
+
+**Body (JSON или multipart/form-data, все поля необязательные):**
+
 ```json
 {
     "title_rus": "Обновлённый заголовок",
     "content_rus": "Обновлённый текст",
-    "target_statuses": ["Student"],
-    "image_url": "https://example.com/new-banner.jpg"
+    "image_url": "https://example.com/new-banner.jpg",
+    "target_statuses": ["Student"]
 }
 ```
 
-> При передаче `images` (файлов) — старые изображения удаляются с Google Drive и заменяются новыми.
-
-**Успех — 200:**
 ```json
+// 200 — успех
 {
     "message": "Уведомление обновлено",
     "updated_fields": ["title_rus", "content_rus"],
@@ -463,34 +397,22 @@ Authorization: Bearer <admin_token>
 ```
 
 **Ошибки:**
-```json
-// 400 — нет данных
-{ "error": "Нет данных для обновления" }
 
-// 400 — недопустимый статус
-{ "error": "Недопустимые статусы: [\"X\"]. Допустимые: ..." }
-
-// 404
-{ "error": "Уведомление не найдено" }
-```
+| Код | Описание |
+|-----|----------|
+| 400 | Нет данных для обновления / недопустимый статус / превышен лимит изображений |
+| 404 | Уведомление не найдено |
 
 ---
 
 ### DELETE `/admin/notifications/<notif_id>/delete/`
+
 Удалить уведомление и все прикреплённые изображения с Google Drive.
 
-**Headers:**
-```
-Authorization: Bearer <admin_token>
-```
-
-**Успех — 200:**
 ```json
+// 200 — успех
 { "message": "Уведомление удалено" }
-```
 
-**Ошибки:**
-```json
 // 404
 { "error": "Уведомление не найдено" }
 ```
@@ -498,30 +420,26 @@ Authorization: Bearer <admin_token>
 ---
 
 ### GET `/notifications/`
-Уведомления текущего пользователя. Фильтруются по его статусу. Отсортированы от новых к старым.
 
-**Headers:**
-```
-Authorization: Bearer <token>
-```
+Уведомления текущего пользователя. Возвращает только те, где статус пользователя входит в `target_statuses`. Отсортированы от новых к старым.
 
-**Успех — 200:**
 ```json
+// 200 — успех
 {
     "total": 5,
     "notifications": [ { ... } ]
 }
 ```
 
-> Пользователь видит только уведомления, где его статус входит в `target_statuses`.
-
 ---
 
 ## FCM Push-уведомления
 
-### Как подключить в мобильном приложении
+Бэкенд отправляет FCM push автоматически при создании уведомления (`POST /admin/notifications/create/`).
 
-**Шаг 1.** Получить FCM `device_token` через Firebase SDK.
+**Как подключить в мобильном приложении:**
+
+**Шаг 1.** Получить FCM `device_token` через Firebase SDK на устройстве.
 
 **Шаг 2.** Передать токен при входе:
 ```json
@@ -529,13 +447,13 @@ POST /api/users/login/
 {
     "username": "john_doe",
     "password": "MyPassword123",
-    "device_token": "фкм_токен_устройства"
+    "device_token": "fcm_token_устройства"
 }
 ```
 
-**Шаг 3.** Токен сохраняется в Firestore. При создании уведомления бэкенд автоматически находит все токены пользователей с нужными статусами и отправляет push каждому.
+**Шаг 3.** Токен сохраняется в Firestore. При создании уведомления бэкенд находит все `device_token` пользователей с нужными `target_statuses` и отправляет push каждому.
 
-> Токен обновляется автоматически при каждом входе если он изменился.
+> Токен обновляется автоматически при каждом входе.
 
 ---
 
@@ -553,9 +471,9 @@ POST /api/users/login/
 
 ---
 
-## Как проверить в Postman
+## Примеры запросов (Postman)
 
-### Расписание — создание
+### Создать расписание
 ```
 POST http://127.0.0.1:8000/api/info/admin/schedules/create/
 Authorization: Bearer <admin_token>
@@ -572,21 +490,22 @@ Content-Type: application/json
 }
 ```
 
-### Расписание группы
+### Расписание конкретной группы
 ```
 GET http://127.0.0.1:8000/api/info/schedules/group/CS-101/
 Authorization: Bearer <token>
 ```
 
-### Уведомление — создание с FCM
+### Создать уведомление (с FCM push всем студентам)
 ```
 POST http://127.0.0.1:8000/api/info/admin/notifications/create/
 Authorization: Bearer <admin_token>
 Content-Type: application/json
 
 {
-    "title_rus": "Тест",
-    "content_rus": "Занятия отменены",
+    "title_rus": "Занятия отменены",
+    "title_eng": "Classes cancelled",
+    "content_rus": "Занятия 23 июня отменяются",
     "target_statuses": ["Student"]
 }
 ```

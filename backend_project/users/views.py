@@ -191,14 +191,17 @@ def _resolve_group_name(group_id: str, cache: dict | None = None) -> str:
 
 def _user_dict(user, groups_cache: dict | None = None):
     return {
-        'id': user.id,
-        'username': user.username,
-        'fullname': user.fullname,
-        'email': user.email,
-        'phone_number': user.phone_number,
-        'status': user.status,
+        'id':                  user.id,
+        'username':            user.username,
+        'fullname':            user.fullname,
+        'email':               user.email,
+        'phone_number':        user.phone_number,
+        'status':              user.status,
         'verification_status': user.verification_status,
-        'group': _resolve_group_name(user.group or '', groups_cache),
+        'group_id':            user.group or '',
+        'group':               _resolve_group_name(user.group or '', groups_cache),
+        'avatar_id':           user.avatar_id or '',
+        'date_joined':         str(user.date_joined) if user.date_joined else '',
     }
 
 
@@ -243,7 +246,23 @@ def admin_get_user(request, user_id):
         user = None
     if not user:
         return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
-    return Response({'user': _user_dict(user)})
+    return Response({
+        'user': {
+            'id':                  user.id,
+            'username':            user.username or '',
+            'fullname':            user.fullname or '',
+            'email':               user.email or '',
+            'phone_number':        user.phone_number or '',
+            'date_of_birth':       user.date_of_birth or '',
+            'status':              user.status or '',
+            'verification_status': user.verification_status or '',
+            'group_id':            user.group or '',
+            'group':               _resolve_group_name(user.group or ''),
+            'avatar_id':           user.avatar_id or '',
+            'date_joined':         str(user.date_joined) if user.date_joined else '',
+            'device_token':        user.device_token or '',
+        }
+    })
 
 
 @api_view(['PATCH'])
