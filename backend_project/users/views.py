@@ -200,7 +200,7 @@ def _user_dict(user, groups_cache: dict | None = None):
         'verification_status': user.verification_status,
         'group_id':            user.group or '',
         'group':               _resolve_group_name(user.group or '', groups_cache),
-        'avatar_id':           user.avatar_id or '',
+        'avatar':              user.avatar or '',
         'date_joined':         str(user.date_joined) if user.date_joined else '',
     }
 
@@ -258,7 +258,7 @@ def admin_get_user(request, user_id):
             'verification_status': user.verification_status or '',
             'group_id':            user.group or '',
             'group':               _resolve_group_name(user.group or ''),
-            'avatar_id':           user.avatar_id or '',
+            'avatar':              user.avatar or '',
             'date_joined':         str(user.date_joined) if user.date_joined else '',
             'device_token':        user.device_token or '',
         }
@@ -617,7 +617,7 @@ def change_avatar(request):
     return Response({
         'message': 'Аватар успешно обновлён',
         'avatar': new_url,
-    })
+    })  
 
 
 # ---------------------------------------------------------------------------

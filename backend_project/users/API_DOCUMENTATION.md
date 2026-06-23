@@ -360,7 +360,7 @@ Authorization: Bearer <token>
             "verification_status": "Approved",
             "group_id": "AbCdEf123",
             "group": "CS-101",
-            "avatar_id": "1FCfMdEvgh...",
+            "avatar": "1FCfMdEvgh...",
             "date_joined": "2025-01-10 08:00:00"
         }
     ]
