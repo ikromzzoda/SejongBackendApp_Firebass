@@ -2,9 +2,10 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    path('register/', views.register, name='user-register'),
-    path('login/',    views.login,    name='user-login'),
-    path('logout/',   views.logout,   name='user-logout'),
+    path('register/',      views.register,      name='user-register'),
+    path('login/',         views.login,         name='user-login'),
+    path('logout/',        views.logout,        name='user-logout'),
+    path('token/refresh/', views.token_refresh, name='token-refresh'),
 
     # Admin — users
     path('admin/users/',                          views.admin_list_users,    name='admin-users-list'),

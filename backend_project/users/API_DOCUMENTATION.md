@@ -99,7 +99,9 @@ Authorization: Bearer <token>
 
 Регистрация нового пользователя. После регистрации: `status = Guest`, `verification_status = Pending`.
 
-**Body (JSON):**
+> Если передаётся аватар — использовать `multipart/form-data`. Без аватара можно `application/json`.
+
+**Body (multipart/form-data или JSON):**
 
 | Поле | Тип | Обязательное | Описание |
 |------|-----|:---:|----------|
@@ -109,29 +111,22 @@ Authorization: Bearer <token>
 | `phone_number` | string | ✅ | Формат `+992XXXXXXXXX` (9 цифр после +992) |
 | `fullname` | string | ❌ | ФИО |
 | `date_of_birth` | string | ❌ | Дата рождения, например `2000-01-15` |
+| `avatar` | file | ❌ | Фото профиля (JPEG, PNG, WEBP, макс. 3 МБ) |
 
 ```json
-// Запрос
-{
-    "username": "john_doe",
-    "password": "MyPassword123",
-    "email": "john@example.com",
-    "phone_number": "+992991234567",
-    "fullname": "John Doe",
-    "date_of_birth": "2000-01-15"
-}
-
 // 201 — успех
 {
     "message": "Регистрация успешна. Ожидайте подтверждения администратора.",
     "token": "eyJhbGci...",
     "status": "Guest",
     "verification_status": "Pending",
+    "avatar": "https://drive.google.com/...",
     "fcm_topic": "status_Guest"
 }
 ```
 
 > `token` — сохраните для следующих запросов.  
+> `avatar` — URL загруженного аватара, пустая строка если не передавался.  
 > `fcm_topic` — зарезервировано для FCM.
 
 **Ошибки:**
@@ -141,6 +136,8 @@ Authorization: Bearer <token>
 | 400 | `{"error": "Поле \"email\" обязательно"}` |
 | 400 | `{"error": "Номер должен начинаться с '+992' и содержать 9 цифр после него."}` |
 | 400 | `{"error": "Пользователь с таким username уже существует"}` |
+| 400 | `{"error": "Недопустимый формат аватара. Разрешены: JPEG, PNG, WEBP"}` |
+| 400 | `{"error": "Файл аватара слишком большой. Максимум 3 МБ"}` |
 
 ---
 
@@ -168,12 +165,14 @@ Authorization: Bearer <token>
 {
     "message": "Вход выполнен",
     "token": "eyJhbGci...",
+    "refresh_token": "eyJhbGci...",
     "status": "Student",
     "verification_status": "Approved"
 }
 ```
 
-> JWT токен действителен 30 дней. Используйте во всех последующих запросах.
+> `token` — access token, действителен **1 день**.  
+> `refresh_token` — действителен **30 дней**. Используйте для получения нового `token` без повторного логина.
 
 **Ошибки:**
 
@@ -184,9 +183,41 @@ Authorization: Bearer <token>
 
 ---
 
+### POST `/token/refresh/`
+
+Получить новый `token` без повторного логина. При каждом вызове оба токена обновляются (rotation) — старый `refresh_token` сразу становится недействительным.
+
+**Body (JSON):**
+
+| Поле | Тип | Обязательное | Описание |
+|------|-----|:---:|----------|
+| `refresh_token` | string | ✅ | Refresh token, полученный при логине |
+
+```json
+// Запрос
+{ "refresh_token": "eyJhbGci..." }
+
+// 200 — успех
+{
+    "token": "eyJhbGci...",
+    "refresh_token": "eyJhbGci..."
+}
+```
+
+**Ошибки:**
+
+| Код | Ответ |
+|-----|-------|
+| 400 | `{"error": "refresh_token не передан"}` |
+| 401 | `{"error": "Refresh token истёк. Войдите заново."}` |
+| 401 | `{"error": "Недействительный refresh token"}` |
+| 401 | `{"error": "Refresh token недействителен или уже использован"}` |
+
+---
+
 ### POST `/logout/`
 
-Выход. Токен немедленно добавляется в чёрный список.
+Выход. Access token добавляется в чёрный список, refresh token аннулируется.
 
 **Headers:** `Authorization: Bearer <token>`
 

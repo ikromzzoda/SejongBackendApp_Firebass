@@ -32,7 +32,8 @@ class User(Model):
         ('Approved', 'Approved'),
         ('Rejected', 'Rejected'),
     )
-    verification_status = TextField(default='Pending')
+    verification_status  = TextField(default='Pending')
+    refresh_token_jti    = TextField()
 
     class Meta:
         collection_name = 'users'

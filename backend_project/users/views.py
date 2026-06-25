@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 
 from .models import User, BlacklistedToken, DEFAULT_AVATAR
 from groups.models import Group
-from utils.jwt_utils import generate_token, decode_token
+from utils.jwt_utils import generate_token, generate_refresh_token, decode_token
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_avatar, delete_avatar
 
@@ -51,6 +51,19 @@ def register(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    avatar_file = request.FILES.get('avatar')
+    if avatar_file:
+        if avatar_file.content_type not in ALLOWED_IMAGE_TYPES:
+            return Response(
+                {'error': 'Недопустимый формат аватара. Разрешены: JPEG, PNG, WEBP'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if avatar_file.size > MAX_AVATAR_SIZE:
+            return Response(
+                {'error': 'Файл аватара слишком большой. Максимум 3 МБ'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     user = User()
     user.username      = data['username']
     user.fullname      = data.get('fullname', '')
@@ -61,6 +74,17 @@ def register(request):
     user.status              = 'Guest'
     user.verification_status = 'Pending'
     user.save()
+
+    if avatar_file:
+        ext      = avatar_file.name.rsplit('.', 1)[-1] if '.' in avatar_file.name else 'jpg'
+        filename = f"avatar_{user.id}.{ext}"
+        try:
+            new_file_id, new_url = upload_avatar(avatar_file, filename, avatar_file.content_type)
+            user.avatar    = new_url
+            user.avatar_id = new_file_id
+            user.update()
+        except Exception:
+            pass
 
     token = generate_token(
         user_id=user.id,
@@ -74,6 +98,7 @@ def register(request):
         'token': token,
         'status': user.status,
         'verification_status': user.verification_status,
+        'avatar': user.avatar or '',
         'fcm_topic': f'status_{user.status}',
     }, status=status.HTTP_201_CREATED)
 
@@ -104,17 +129,21 @@ def login(request):
         user.device_token = device_token
         user.update()
 
-    token = generate_token(
+    access_token = generate_token(
         user_id=user.id,
         username=user.username,
         status=user.status,
         verification_status=user.verification_status,
     )
+    refresh_token, refresh_jti = generate_refresh_token(user.id)
+    user.refresh_token_jti = refresh_jti
+    user.update()
 
     return Response({
-        'message': 'Вход выполнен',
-        'token': token,
-        'status': user.status,
+        'message':       'Вход выполнен',
+        'token':         access_token,
+        'refresh_token': refresh_token,
+        'status':        user.status,
         'verification_status': user.verification_status,
     })
 
@@ -137,7 +166,54 @@ def logout(request):
     bt.id = payload['jti']
     bt.save()
 
+    try:
+        user = User.collection.get(f"users/{payload['user_id']}")
+        if user:
+            user.refresh_token_jti = ''
+            user.update()
+    except Exception:
+        pass
+
     return Response({'message': 'Выход выполнен'})
+
+
+@api_view(['POST'])
+def token_refresh(request):
+    incoming = request.data.get('refresh_token', '')
+    if not incoming:
+        return Response({'error': 'refresh_token не передан'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        payload = decode_token(incoming)
+    except pyjwt.ExpiredSignatureError:
+        return Response({'error': 'Refresh token истёк. Войдите заново.'}, status=status.HTTP_401_UNAUTHORIZED)
+    except pyjwt.InvalidTokenError:
+        return Response({'error': 'Недействительный refresh token'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    if payload.get('type') != 'refresh':
+        return Response({'error': 'Недействительный refresh token'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        user = User.collection.get(f"users/{payload['user_id']}")
+    except Exception:
+        user = None
+    if not user or user.refresh_token_jti != payload['jti']:
+        return Response({'error': 'Refresh token недействителен или уже использован'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    new_access = generate_token(
+        user_id=user.id,
+        username=user.username,
+        status=user.status,
+        verification_status=user.verification_status,
+    )
+    new_refresh, new_jti = generate_refresh_token(user.id)
+    user.refresh_token_jti = new_jti
+    user.update()
+
+    return Response({
+        'token':         new_access,
+        'refresh_token': new_refresh,
+    })
 
 
 # ---------------------------------------------------------------------------
