@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
@@ -13,6 +14,7 @@ _ALL_STATUSES = ['Guest', 'Student', 'Teacher', 'Admin']
 ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
 MAX_IMAGE_SIZE = 2 * 1024 * 1024   # 2 МБ
 MAX_IMAGES = 10
+_CACHE_TTL = 60  # seconds
 
 
 def _ann_dict(ann) -> dict:
@@ -30,6 +32,17 @@ def _ann_dict(ann) -> dict:
         'time_posted': str(ann.time_posted) if ann.time_posted else '',
         'author':      ann.author or '',
     }
+
+
+def _get_announcement_or_404(ann_id):
+    """Returns (ann, None) or (None, error_response)."""
+    try:
+        ann = Announcement.collection.get(f'announcements/{ann_id}')
+    except Exception:
+        ann = None
+    if not ann:
+        return None, Response({'error': 'Объявление не найдено'}, status=status.HTTP_404_NOT_FOUND)
+    return ann, None
 
 
 def _upload_images(files) -> tuple[list, Response | None]:
@@ -64,6 +77,22 @@ def _upload_images(files) -> tuple[list, Response | None]:
     return uploaded, None
 
 
+def _create_notification(ann, images: list) -> None:
+    notif = Notification()
+    for field in ('title_taj', 'title_rus', 'title_eng', 'title_kor',
+                  'content_taj', 'content_rus', 'content_eng', 'content_kor'):
+        setattr(notif, field, getattr(ann, field) or '')
+    notif.image_url = images[0]['url'] if images else ''
+    notif.images = images
+    notif.target_statuses = _ALL_STATUSES
+    notif.save()
+
+
+def _invalidate_cache() -> None:
+    version = cache.get('announcements_v', 0)
+    cache.set('announcements_v', version + 1, None)
+
+
 # ---------------------------------------------------------------------------
 # Admin endpoints
 # ---------------------------------------------------------------------------
@@ -96,21 +125,23 @@ def admin_create_announcement(request):
         setattr(ann, field, data.get(field, '').strip())
     ann.images = images
     ann.author = request.user_payload.get('username', '')
-    ann.save()
 
-    # Automatically create a Notification and push it to all users
-    notif = Notification()
-    for field in ('title_taj', 'title_rus', 'title_eng', 'title_kor',
-                  'content_taj', 'content_rus', 'content_eng', 'content_kor'):
-        setattr(notif, field, getattr(ann, field) or '')
-    notif.image_url = images[0]['url'] if images else ''
-    notif.images = images
-    notif.target_statuses = _ALL_STATUSES
-    notif.save()
+    try:
+        ann.save()
+    except Exception as e:
+        for item in images:
+            delete_file(item['file_id'])
+        return Response(
+            {'error': f'Ошибка сохранения объявления: {e}'},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
 
-    title = (ann.title_rus or ann.title_eng or ann.title_taj or ann.title_kor or 'Объявление')
-    body  = (ann.content_rus or ann.content_eng or ann.content_taj or ann.content_kor or '')
+    _create_notification(ann, images)
+
+    title = ann.title_rus or ann.title_eng or ann.title_taj or ann.title_kor or 'Объявление'
+    body  = ann.content_rus or ann.content_eng or ann.content_taj or ann.content_kor or ''
     send_notification_to_statuses(_ALL_STATUSES, title, body)
+    _invalidate_cache()
 
     return Response(
         {'message': 'Объявление успешно создано', 'announcement': _ann_dict(ann)},
@@ -121,12 +152,9 @@ def admin_create_announcement(request):
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_announcement(request, ann_id):
-    try:
-        ann = Announcement.collection.get(f'announcements/{ann_id}')
-    except Exception:
-        ann = None
-    if not ann:
-        return Response({'error': 'Объявление не найдено'}, status=status.HTTP_404_NOT_FOUND)
+    ann, err = _get_announcement_or_404(ann_id)
+    if err:
+        return err
 
     data = request.data
     updated_fields = []
@@ -144,13 +172,14 @@ def admin_edit_announcement(request, ann_id):
                 {'error': f'Максимум {MAX_IMAGES} изображений'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # Удаляем старые изображения
-        for item in (ann.images or []):
-            delete_file(item.get('file_id', ''))
-
         new_images, err = _upload_images(image_files)
         if err:
             return err
+
+        # Delete old images only after new ones are successfully uploaded
+        for item in (ann.images or []):
+            delete_file(item.get('file_id', ''))
+
         ann.images = new_images
         updated_fields.append('images')
 
@@ -158,23 +187,22 @@ def admin_edit_announcement(request, ann_id):
         return Response({'message': 'Нет данных для обновления'}, status=status.HTTP_400_BAD_REQUEST)
 
     ann.update()
+    _invalidate_cache()
     return Response({'message': 'Объявление обновлено', 'updated_fields': updated_fields, 'announcement': _ann_dict(ann)})
 
 
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_announcement(request, ann_id):
-    try:
-        ann = Announcement.collection.get(f'announcements/{ann_id}')
-    except Exception:
-        ann = None
-    if not ann:
-        return Response({'error': 'Объявление не найдено'}, status=status.HTTP_404_NOT_FOUND)
+    ann, err = _get_announcement_or_404(ann_id)
+    if err:
+        return err
 
     for item in (ann.images or []):
         delete_file(item.get('file_id', ''))
 
     Announcement.collection.delete(f'announcements/{ann_id}')
+    _invalidate_cache()
     return Response({'message': 'Объявление удалено'})
 
 
@@ -185,21 +213,30 @@ def admin_delete_announcement(request, ann_id):
 @api_view(['GET'])
 @jwt_required
 def list_announcements(request):
-    announcements = list(Announcement.collection.fetch(200))
-    return Response({
-        'total': len(announcements),
-        'announcements': [_ann_dict(a) for a in announcements],
-    })
+    try:
+        limit = min(int(request.query_params.get('limit', 20)), 100)
+    except (ValueError, TypeError):
+        limit = 20
+
+    version = cache.get('announcements_v', 0)
+    cache_key = f'announcements_{version}_{limit}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return Response(cached)
+
+    raw = list(Announcement.collection.fetch(limit + 1))
+    has_more = len(raw) > limit
+    items = [_ann_dict(a) for a in raw[:limit]]
+
+    result = {'total': len(items), 'has_more': has_more, 'announcements': items}
+    cache.set(cache_key, result, _CACHE_TTL)
+    return Response(result)
 
 
 @api_view(['GET'])
 @jwt_required
 def get_announcement(request, ann_id):
-    try:
-        ann = Announcement.collection.get(f'announcements/{ann_id}')
-    except Exception:
-        ann = None
-    if not ann:
-        return Response({'error': 'Объявление не найдено'}, status=status.HTTP_404_NOT_FOUND)
-
+    ann, err = _get_announcement_or_404(ann_id)
+    if err:
+        return err
     return Response({'announcement': _ann_dict(ann)})

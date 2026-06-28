@@ -7,5 +7,5 @@ urlpatterns = [
     path("api/groups/", include("groups.urls")),
     path("api/books/", include("ebook_and_chat.urls")),
     path("api/info/", include("info.urls")),
-    path("api/announcements/", include("announcments.urls")),
+    path("api/announcements/", include("announcements.urls")),
 ]

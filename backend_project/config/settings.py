@@ -22,7 +22,7 @@ DEBUG = False  # В продакшене всегда False! В .env можно 
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = False
 
 SECURE_PROXY_SSL_HEADER = (
     'HTTP_X_FORWARDED_PROTO',
@@ -54,7 +54,7 @@ INSTALLED_APPS = [
     "groups",
     "ebook_and_chat",
     "info",
-    "announcments",
+    "announcements",
 ]
 
 MIDDLEWARE = [
