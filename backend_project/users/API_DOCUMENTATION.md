@@ -33,14 +33,14 @@ Authorization: Bearer <token>
 | POST | `/register/` | Открытый | Регистрация |
 | POST | `/login/` | Открытый | Вход |
 | POST | `/logout/` | Авторизованный | Выход |
+| POST | `/token/refresh/` | Открытый | Обновить токен |
 | GET | `/profile/` | Авторизованный | Мои данные |
-| POST | `/profile/update/` | Авторизованный | Изменить профиль |
+| PATCH | `/profile/update/` | Авторизованный | Изменить профиль |
 | POST | `/profile/avatar/` | Авторизованный | Сменить аватар |
 | GET | `/admin/users/` | Admin | Список всех пользователей |
 | POST | `/admin/users/create/` | Admin | Создать пользователя |
 | GET | `/admin/users/<user_id>/` | Admin | Получить пользователя |
 | PATCH | `/admin/users/<user_id>/edit/` | Admin | Редактировать пользователя |
-| GET | `/admin/pending/` | Admin | Ожидающие верификации |
 | POST | `/admin/verify/<user_id>/` | Admin | Подтвердить / отклонить |
 | POST | `/admin/set-status/<user_id>/` | Admin | Назначить статус |
 | GET | `/admin/students/import/template/` | Admin | Скачать шаблон Excel |
@@ -67,9 +67,9 @@ Authorization: Bearer <token>
 | `Approved` | Подтверждён |
 | `Rejected` | Отклонён |
 
-### Объект пользователя (в списках и ответах admin-эндпоинтов)
+### Стандартный объект пользователя
 
-Возвращается функцией `_user_dict` — используется во всех admin-эндпоинтах кроме `GET /admin/users/<user_id>/`.
+Возвращается функцией `_user_dict` — используется во всех admin-эндпоинтах.
 
 ```json
 {
@@ -82,14 +82,26 @@ Authorization: Bearer <token>
     "verification_status": "Approved",
     "group_id": "AbCdEf123",
     "group": "CS-101",
-    "avatar_id": "1FCfMdEvgh...",
+    "avatar": "https://drive.google.com/uc?id=...",
     "date_joined": "2025-01-10 08:00:00"
 }
 ```
 
 > `group_id` — Firestore-ID группы. Пустая строка `""` если не назначена.  
 > `group` — имя группы. Пустая строка `""` если не назначена.  
-> `avatar_id` — ID файла аватара на Google Drive. Пустая строка `""` если нет.
+> `avatar` — URL аватара на Google Drive. Стандартный аватар если не загружен.
+
+### Расширенный объект пользователя
+
+Возвращается только эндпоинтом `GET /admin/users/<user_id>/`. Включает все стандартные поля плюс:
+
+```json
+{
+    "...",
+    "date_of_birth": "2000-01-15",
+    "device_token": "fcm_token_устройства"
+}
+```
 
 ---
 
@@ -120,13 +132,13 @@ Authorization: Bearer <token>
     "token": "eyJhbGci...",
     "status": "Guest",
     "verification_status": "Pending",
-    "avatar": "https://drive.google.com/...",
+    "avatar": "https://drive.google.com/uc?id=...",
     "fcm_topic": "status_Guest"
 }
 ```
 
 > `token` — сохраните для следующих запросов.  
-> `avatar` — URL загруженного аватара, пустая строка если не передавался.  
+> `avatar` — URL загруженного аватара, или URL стандартного аватара если не передавался.  
 > `fcm_topic` — зарезервировано для FCM.
 
 **Ошибки:**
@@ -263,7 +275,6 @@ Authorization: Bearer <token>
 }
 ```
 
-> Этот эндпоинт возвращает `avatar` (URL), а не `avatar_id`.  
 > `group_id` — Firestore-ID группы. Имя группы здесь не возвращается.
 
 **Ошибки:**
@@ -275,7 +286,7 @@ Authorization: Bearer <token>
 
 ---
 
-### POST `/profile/update/`
+### PATCH `/profile/update/`
 
 Обновление данных профиля. Передавайте только изменяемые поля.
 
@@ -325,7 +336,7 @@ Authorization: Bearer <token>
 
 ### POST `/profile/avatar/`
 
-Загрузить новый аватар. Загружается на Google Drive.
+Загрузить новый аватар. Старый файл удаляется с Google Drive автоматически.
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -364,6 +375,8 @@ Authorization: Bearer <token>
 
 Список всех пользователей. Поддерживается фильтрация — только **один** параметр за раз.
 
+> Для получения ожидающих верификации используйте `?verification_status=Pending`.
+
 **Headers:** `Authorization: Bearer <admin_token>`
 
 **Query параметры (необязательные):**
@@ -391,7 +404,7 @@ Authorization: Bearer <token>
             "verification_status": "Approved",
             "group_id": "AbCdEf123",
             "group": "CS-101",
-            "avatar": "1FCfMdEvgh...",
+            "avatar": "https://drive.google.com/uc?id=...",
             "date_joined": "2025-01-10 08:00:00"
         }
     ]
@@ -448,7 +461,7 @@ Authorization: Bearer <token>
         "verification_status": "Approved",
         "group_id": "AbCdEf123",
         "group": "CS-101",
-        "avatar_id": "",
+        "avatar": "https://drive.google.com/uc?id=...",
         "date_joined": "2026-06-22 10:00:00"
     }
 }
@@ -469,7 +482,7 @@ Authorization: Bearer <token>
 
 ### GET `/admin/users/<user_id>/`
 
-Получить подробные данные одного пользователя по ID.
+Получить подробные данные одного пользователя по ID. Возвращает расширенный объект: дополнительно включает `date_of_birth` и `device_token`.
 
 **Headers:** `Authorization: Bearer <admin_token>`
 
@@ -484,13 +497,13 @@ Authorization: Bearer <token>
         "fullname": "John Doe",
         "email": "john@example.com",
         "phone_number": "+992991234567",
-        "date_of_birth": "2000-01-15",
         "status": "Student",
         "verification_status": "Approved",
         "group_id": "AbCdEf123",
         "group": "CS-101",
-        "avatar_id": "1FCfMdEvgh...",
+        "avatar": "https://drive.google.com/uc?id=...",
         "date_joined": "2025-01-10 08:00:00",
+        "date_of_birth": "2000-01-15",
         "device_token": "fcm_token_устройства"
     }
 }
@@ -498,8 +511,6 @@ Authorization: Bearer <token>
 // 404
 { "error": "Пользователь не найден" }
 ```
-
-> Этот эндпоинт возвращает расширенный объект: дополнительно включает `date_of_birth` и `device_token`.
 
 ---
 
@@ -548,7 +559,7 @@ Authorization: Bearer <token>
         "verification_status": "Approved",
         "group_id": "BbCcDdEe...",
         "group": "CS-102",
-        "avatar_id": "1FCfMdEvgh...",
+        "avatar": "https://drive.google.com/uc?id=...",
         "date_joined": "2025-01-10 08:00:00"
     }
 }
@@ -566,35 +577,6 @@ Authorization: Bearer <token>
 | 404 | `{"error": "Пользователь не найден"}` |
 | 404 | `{"error": "Группа не найдена"}` |
 | 404 | `{"error": "Группа \"CS-999\" не найдена"}` |
-
----
-
-### GET `/admin/pending/`
-
-Список пользователей с `verification_status = Pending`.
-
-**Headers:** `Authorization: Bearer <admin_token>`
-
-```json
-// 200 — успех
-{
-    "users": [
-        {
-            "id": "users/mMplMaUG...",
-            "username": "new_user",
-            "fullname": "Новый Пользователь",
-            "email": "user@example.com",
-            "phone_number": "+992991234567",
-            "status": "Guest",
-            "verification_status": "Pending",
-            "group_id": "",
-            "group": "",
-            "avatar_id": "",
-            "date_joined": "2026-06-20 12:00:00"
-        }
-    ]
-}
-```
 
 ---
 
@@ -631,7 +613,7 @@ Authorization: Bearer <token>
         "verification_status": "Approved",
         "group_id": "",
         "group": "",
-        "avatar_id": "",
+        "avatar": "https://drive.google.com/uc?id=...",
         "date_joined": "2026-06-20 12:00:00"
     }
 }
@@ -639,7 +621,7 @@ Authorization: Bearer <token>
 // 200 — reject
 {
     "message": "Пользователь отклонён.",
-    "user": { ... }
+    "user": { "..." }
 }
 ```
 
@@ -680,7 +662,7 @@ Authorization: Bearer <token>
         "verification_status": "Approved",
         "group_id": "AbCdEf123",
         "group": "CS-101",
-        "avatar_id": "1FCfMdEvgh...",
+        "avatar": "https://drive.google.com/uc?id=...",
         "date_joined": "2025-01-10 08:00:00"
     }
 }
@@ -754,7 +736,7 @@ Authorization: Bearer <token>
 
 > Созданные студенты получают: `status = Student`, `verification_status = Approved`  
 > `username` генерируется из первого слова ФИО + транслитерация + случайные цифры: `ivan_4821`  
-> `password` генерируется случайно: минимум 1 заглавная, 1 строчная, 1 цифра
+> `password` генерируется криптографически стойко: минимум 1 заглавная, 1 строчная, 1 цифра
 
 > **Как сохранить в Postman:** Send → **Save Response** → **Save to file**
 
@@ -820,7 +802,7 @@ Authorization: Bearer <token>
 
 ### Изменить пароль
 ```
-POST http://127.0.0.1:8000/api/users/profile/update/
+PATCH http://127.0.0.1:8000/api/users/profile/update/
 Authorization: Bearer <token>
 Content-Type: application/json
 
@@ -847,7 +829,7 @@ Authorization: Bearer <admin_token>
 
 ### Список ожидающих верификации
 ```
-GET http://127.0.0.1:8000/api/users/admin/pending/
+GET http://127.0.0.1:8000/api/users/admin/users/?verification_status=Pending
 Authorization: Bearer <admin_token>
 ```
 

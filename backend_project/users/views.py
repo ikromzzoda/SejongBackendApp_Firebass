@@ -1,6 +1,7 @@
 import re
 import uuid
 import random
+import secrets
 import string
 import io
 import jwt as pyjwt
@@ -22,6 +23,38 @@ from utils.drive import upload_avatar, delete_avatar
 
 PHONE_RE = re.compile(r'^\+992\d{9}$')
 
+ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
+MAX_AVATAR_SIZE = 3 * 1024 * 1024  # 3 MB
+
+VALID_STATUSES = {'Student', 'Teacher', 'Admin', 'Guest'}
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
+
+def _require_fields(data, *fields):
+    for field in fields:
+        if not data.get(field):
+            return Response(
+                {'error': f'Поле "{field}" обязательно'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    return None
+
+
+def _validate_phone(phone: str):
+    if not PHONE_RE.match(phone):
+        return Response(
+            {'error': "Номер должен начинаться с '+992' и содержать 9 цифр после него."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return None
+
+
+def _username_taken(username: str) -> bool:
+    return bool(list(User.collection.filter('username', '==', username).fetch(1)))
+
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -31,21 +64,15 @@ PHONE_RE = re.compile(r'^\+992\d{9}$')
 def register(request):
     data = request.data
 
-    for field in ('username', 'password', 'email', 'phone_number'):
-        if not data.get(field):
-            return Response(
-                {'error': f'Поле "{field}" обязательно'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    err = _require_fields(data, 'username', 'password', 'email', 'phone_number')
+    if err:
+        return err
 
-    if not PHONE_RE.match(data['phone_number']):
-        return Response(
-            {'error': "Номер должен начинаться с '+992' и содержать 9 цифр после него."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    err = _validate_phone(data['phone_number'])
+    if err:
+        return err
 
-    existing = list(User.collection.filter('username', '==', data['username']).fetch(1))
-    if existing:
+    if _username_taken(data['username']):
         return Response(
             {'error': 'Пользователь с таким username уже существует'},
             status=status.HTTP_400_BAD_REQUEST,
@@ -127,7 +154,6 @@ def login(request):
     device_token = data.get('device_token', '').strip()
     if device_token and device_token != (user.device_token or ''):
         user.device_token = device_token
-        user.update()
 
     access_token = generate_token(
         user_id=user.id,
@@ -250,9 +276,6 @@ def get_profile(request):
 # Admin — helpers
 # ---------------------------------------------------------------------------
 
-VALID_STATUSES = {'Student', 'Teacher', 'Admin', 'Guest'}
-
-
 def _resolve_group_name(group_id: str, cache: dict | None = None) -> str:
     if not group_id:
         return ''
@@ -265,8 +288,8 @@ def _resolve_group_name(group_id: str, cache: dict | None = None) -> str:
         return group_id
 
 
-def _user_dict(user, groups_cache: dict | None = None):
-    return {
+def _user_dict(user, groups_cache: dict | None = None, full: bool = False):
+    d = {
         'id':                  user.id,
         'username':            user.username,
         'fullname':            user.fullname,
@@ -279,6 +302,10 @@ def _user_dict(user, groups_cache: dict | None = None):
         'avatar':              user.avatar or '',
         'date_joined':         str(user.date_joined) if user.date_joined else '',
     }
+    if full:
+        d['date_of_birth'] = user.date_of_birth or ''
+        d['device_token']  = user.device_token or ''
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -322,23 +349,7 @@ def admin_get_user(request, user_id):
         user = None
     if not user:
         return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
-    return Response({
-        'user': {
-            'id':                  user.id,
-            'username':            user.username or '',
-            'fullname':            user.fullname or '',
-            'email':               user.email or '',
-            'phone_number':        user.phone_number or '',
-            'date_of_birth':       user.date_of_birth or '',
-            'status':              user.status or '',
-            'verification_status': user.verification_status or '',
-            'group_id':            user.group or '',
-            'group':               _resolve_group_name(user.group or ''),
-            'avatar':              user.avatar or '',
-            'date_joined':         str(user.date_joined) if user.date_joined else '',
-            'device_token':        user.device_token or '',
-        }
-    })
+    return Response({'user': _user_dict(user, full=True)})
 
 
 @api_view(['PATCH'])
@@ -365,11 +376,9 @@ def admin_edit_user(request, user_id):
 
     if 'phone_number' in data:
         phone = data['phone_number'].strip()
-        if not PHONE_RE.match(phone):
-            return Response(
-                {'error': "Номер должен начинаться с '+992' и содержать 9 цифр после него."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        err = _validate_phone(phone)
+        if err:
+            return err
         user.phone_number = phone
         updated_fields.append('phone_number')
 
@@ -434,14 +443,6 @@ def admin_edit_user(request, user_id):
         'updated_fields': updated_fields,
         'user': _user_dict(user),
     })
-
-
-@api_view(['GET'])
-@admin_required
-def admin_pending_users(request):
-    """Список пользователей, ожидающих верификации."""
-    users = list(User.collection.filter('verification_status', '==', 'Pending').fetch(100))
-    return Response({'users': [_user_dict(u) for u in users]})
 
 
 @api_view(['POST'])
@@ -511,21 +512,15 @@ def admin_create_user(request):
     """Создать нового пользователя вручную."""
     data = request.data
 
-    for field in ('username', 'password', 'email', 'phone_number'):
-        if not data.get(field):
-            return Response(
-                {'error': f'Поле "{field}" обязательно'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    err = _require_fields(data, 'username', 'password', 'email', 'phone_number')
+    if err:
+        return err
 
-    if not PHONE_RE.match(data['phone_number']):
-        return Response(
-            {'error': "Номер должен начинаться с '+992' и содержать 9 цифр после него."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    err = _validate_phone(data['phone_number'])
+    if err:
+        return err
 
-    existing = list(User.collection.filter('username', '==', data['username']).fetch(1))
-    if existing:
+    if _username_taken(data['username']):
         return Response(
             {'error': 'Пользователь с таким username уже существует'},
             status=status.HTTP_400_BAD_REQUEST,
@@ -576,7 +571,7 @@ def admin_create_user(request):
 # Profile
 # ---------------------------------------------------------------------------
 
-@api_view(['POST'])
+@api_view(['PATCH'])
 @jwt_required
 def update_profile(request):
     """Обновить данные своего профиля."""
@@ -598,8 +593,7 @@ def update_profile(request):
         if not new_username:
             return Response({'error': 'Username не может быть пустым'}, status=status.HTTP_400_BAD_REQUEST)
         if new_username != user.username:
-            taken = list(User.collection.filter('username', '==', new_username).fetch(1))
-            if taken:
+            if _username_taken(new_username):
                 return Response({'error': 'Пользователь с таким username уже существует'}, status=status.HTTP_400_BAD_REQUEST)
             user.username = new_username
             updated_fields.append('username')
@@ -610,11 +604,9 @@ def update_profile(request):
 
     if 'phone_number' in data:
         phone = data['phone_number'].strip()
-        if not PHONE_RE.match(phone):
-            return Response(
-                {'error': "Номер должен начинаться с '+992' и содержать 9 цифр после него."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        err = _validate_phone(phone)
+        if err:
+            return err
         user.phone_number = phone
         updated_fields.append('phone_number')
 
@@ -649,10 +641,6 @@ def update_profile(request):
     })
 
 
-ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
-MAX_AVATAR_SIZE = 3 * 1024 * 1024  # 3 MB
-
-
 @api_view(['POST'])
 @jwt_required
 def change_avatar(request):
@@ -678,6 +666,12 @@ def change_avatar(request):
     if not user:
         return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
 
+    if user.avatar_id:
+        try:
+            delete_avatar(user.avatar_id)
+        except Exception:
+            pass
+
     ext = file.name.rsplit('.', 1)[-1] if '.' in file.name else 'jpg'
     filename = f"avatar_{user_id}.{ext}"
 
@@ -693,7 +687,7 @@ def change_avatar(request):
     return Response({
         'message': 'Аватар успешно обновлён',
         'avatar': new_url,
-    })  
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -701,11 +695,11 @@ def change_avatar(request):
 # ---------------------------------------------------------------------------
 
 _COL_ALIASES = {
-    'fullname':      ['Full Name', 'фио', 'ф.и.о', 'ф.и.о.', 'имя', 'полное имя', 'full name', 'name', 'имя фамилия'],
-    'email':         ['email', 'Email', 'почта', 'e-mail', 'эл. почта', 'электронная почта'],
-    'phone_number':  ['Phone Number', 'phone_number', 'телефон', 'номер', 'номер телефона', 'моб', 'моб.', 'тел'],
-    'date_of_birth': ['Date of Birth/생년월일', 'дата рождения', 'дата', 'birth', 'д.р.', 'день рождения'],
-    'group':         ['Group', 'группа', 'учебная группа', 'класс'],
+    'fullname':      ['full name', 'фио', 'ф.и.о', 'ф.и.о.', 'имя', 'полное имя', 'name', 'имя фамилия'],
+    'email':         ['email', 'почта', 'e-mail', 'эл. почта', 'электронная почта'],
+    'phone_number':  ['phone number', 'phone_number', 'телефон', 'номер', 'номер телефона', 'моб', 'моб.', 'тел'],
+    'date_of_birth': ['date of birth/생년월일', 'дата рождения', 'дата', 'birth', 'д.р.', 'день рождения'],
+    'group':         ['group', 'группа', 'учебная группа', 'класс'],
 }
 
 _TRANSLIT = {
@@ -720,7 +714,7 @@ def _transliterate(text: str) -> str:
     return ''.join(_TRANSLIT.get(c, c) for c in text.lower())
 
 
-def _generate_username(fullname: str, existing: set) -> str:
+def _generate_username(fullname: str, batch_taken: set) -> str:
     parts = fullname.strip().split()
     if parts:
         base = _transliterate(parts[0])
@@ -729,7 +723,7 @@ def _generate_username(fullname: str, existing: set) -> str:
         base = 'student'
     for _ in range(20):
         candidate = f"{base}_{random.randint(1000, 9999)}"
-        if candidate not in existing:
+        if candidate not in batch_taken and not _username_taken(candidate):
             return candidate
     return f"student_{uuid.uuid4().hex[:8]}"
 
@@ -737,12 +731,12 @@ def _generate_username(fullname: str, existing: set) -> str:
 def _generate_password(length: int = 10) -> str:
     chars = string.ascii_letters + string.digits
     pwd = [
-        random.choice(string.ascii_uppercase),
-        random.choice(string.ascii_lowercase),
-        random.choice(string.digits),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
     ]
-    pwd += [random.choice(chars) for _ in range(length - 3)]
-    random.shuffle(pwd)
+    pwd += [secrets.choice(chars) for _ in range(length - 3)]
+    secrets.SystemRandom().shuffle(pwd)
     return ''.join(pwd)
 
 
@@ -802,8 +796,8 @@ def admin_bulk_import(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    existing_usernames = {u.username for u in User.collection.fetch(10000)}
-    groups_by_name     = {g.name.lower(): g.id for g in Group.collection.fetch(100)}
+    batch_usernames: set = set()
+    groups_by_name  = {g.name.lower(): g.id for g in Group.collection.fetch(100)}
 
     results = []
     for row in rows[1:]:
@@ -821,9 +815,9 @@ def admin_bulk_import(request):
         date_of_birth = get('date_of_birth')
         group_name    = get('group')
 
-        username = _generate_username(fullname or 'student', existing_usernames)
+        username = _generate_username(fullname or 'student', batch_usernames)
         password = _generate_password()
-        existing_usernames.add(username)
+        batch_usernames.add(username)
 
         group_id = groups_by_name.get(group_name.lower(), '') if group_name else ''
 

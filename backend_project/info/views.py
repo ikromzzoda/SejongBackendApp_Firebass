@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
@@ -71,6 +72,30 @@ def _fetch_names(group_id, teacher_id):
     return group_name, teacher_name
 
 
+def _build_teachers_cache(teacher_ids: set) -> dict:
+    cache = {}
+    for tid in teacher_ids:
+        try:
+            t = User.collection.get(f'users/{tid}')
+            if t:
+                cache[tid] = t.fullname or ''
+        except Exception:
+            pass
+    return cache
+
+
+def _build_groups_cache(group_ids: set) -> dict:
+    cache = {}
+    for gid in group_ids:
+        try:
+            g = Group.collection.get(f'groups/{gid}')
+            if g:
+                cache[gid] = g.name or ''
+        except Exception:
+            pass
+    return cache
+
+
 def _lookup_group(name):
     found = list(Group.collection.filter('name', '==', name).fetch(1))
     return found[0] if found else None
@@ -109,6 +134,32 @@ def _validate_book(val):
     if book not in VALID_BOOKS:
         return None, 'Поле "book" должно быть от 1 до 8'
     return book, None
+
+
+def _get_schedule(schedule_id):
+    try:
+        return Schedule.collection.get(f'schedules/{schedule_id}')
+    except Exception:
+        return None
+
+
+def _get_notification(notif_id):
+    try:
+        return Notification.collection.get(f'notifications/{notif_id}')
+    except Exception:
+        return None
+
+
+def _pagination_params(request, default_limit=100):
+    try:
+        limit = min(max(int(request.GET.get('limit', default_limit)), 1), 500)
+    except (ValueError, TypeError):
+        limit = default_limit
+    try:
+        offset = max(int(request.GET.get('offset', 0)), 0)
+    except (ValueError, TypeError):
+        offset = 0
+    return limit, offset
 
 
 # ---------------------------------------------------------------------------
@@ -185,39 +236,46 @@ def admin_create_schedule(request):
 @api_view(['GET'])
 @admin_required
 def admin_list_schedules(request):
-    group_name   = request.GET.get('group_name', '').strip()
-    teacher_name = request.GET.get('teacher_name', '').strip()
+    group_name    = request.GET.get('group_name', '').strip()
+    teacher_name  = request.GET.get('teacher_name', '').strip()
+    limit, offset = _pagination_params(request)
 
     if group_name:
         group = _lookup_group(group_name)
         if not group:
             return Response({'error': f'Группа "{group_name}" не найдена'}, status=status.HTTP_404_NOT_FOUND)
-        schedules = list(Schedule.collection.filter('group_id', '==', group.id).fetch(100))
+        schedules = list(Schedule.collection.filter('group_id', '==', group.id).fetch(7))
+        teachers_cache = _build_teachers_cache({s.teacher_id for s in schedules})
+        result = [
+            _schedule_dict(s, group.name or '', teachers_cache.get(s.teacher_id, ''))
+            for s in schedules
+        ]
     elif teacher_name:
         teacher = _lookup_teacher(teacher_name)
         if not teacher:
             return Response({'error': f'Учитель "{teacher_name}" не найден'}, status=status.HTTP_404_NOT_FOUND)
         schedules = list(Schedule.collection.filter('teacher_id', '==', teacher.id).fetch(100))
+        groups_cache = _build_groups_cache({s.group_id for s in schedules})
+        result = [
+            _schedule_dict(s, groups_cache.get(s.group_id, ''), teacher.fullname or '')
+            for s in schedules
+        ]
     else:
         schedules = list(Schedule.collection.fetch(500))
-
-    groups_cache, teachers_cache = _build_caches()
-    return Response({
-        'total':     len(schedules),
-        'schedules': [
+        groups_cache, teachers_cache = _build_caches()
+        result = [
             _schedule_dict(s, groups_cache.get(s.group_id, ''), teachers_cache.get(s.teacher_id, ''))
             for s in schedules
-        ],
-    })
+        ]
+
+    total = len(result)
+    return Response({'total': total, 'schedules': result[offset:offset + limit]})
 
 
 @api_view(['GET'])
 @admin_required
 def admin_get_schedule(request, schedule_id):
-    try:
-        sched = Schedule.collection.get(f'schedules/{schedule_id}')
-    except Exception:
-        sched = None
+    sched = _get_schedule(schedule_id)
     if not sched:
         return Response({'error': 'Расписание не найдено'}, status=status.HTTP_404_NOT_FOUND)
     group_name, teacher_name = _fetch_names(sched.group_id, sched.teacher_id)
@@ -227,10 +285,7 @@ def admin_get_schedule(request, schedule_id):
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_schedule(request, schedule_id):
-    try:
-        sched = Schedule.collection.get(f'schedules/{schedule_id}')
-    except Exception:
-        sched = None
+    sched = _get_schedule(schedule_id)
     if not sched:
         return Response({'error': 'Расписание не найдено'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -310,10 +365,7 @@ def admin_edit_schedule(request, schedule_id):
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_schedule(request, schedule_id):
-    try:
-        sched = Schedule.collection.get(f'schedules/{schedule_id}')
-    except Exception:
-        sched = None
+    sched = _get_schedule(schedule_id)
     if not sched:
         return Response({'error': 'Расписание не найдено'}, status=status.HTTP_404_NOT_FOUND)
     Schedule.collection.delete(f'schedules/{schedule_id}')
@@ -327,14 +379,17 @@ def admin_delete_schedule(request, schedule_id):
 @api_view(['GET'])
 @jwt_required
 def get_all_schedules(request):
+    limit, offset = _pagination_params(request)
     schedules = list(Schedule.collection.fetch(500))
     schedules.sort(key=lambda s: (s.day if s.day is not None else 7, s.start_time or ''))
     groups_cache, teachers_cache = _build_caches()
+    total = len(schedules)
+    page  = schedules[offset:offset + limit]
     return Response({
-        'total':     len(schedules),
+        'total':     total,
         'schedules': [
             _schedule_dict(s, groups_cache.get(s.group_id, ''), teachers_cache.get(s.teacher_id, ''))
-            for s in schedules
+            for s in page
         ],
     })
 
@@ -349,7 +404,7 @@ def get_group_schedule(request, group_name):
     schedules = list(Schedule.collection.filter('group_id', '==', group.id).fetch(7))
     schedules.sort(key=lambda s: s.day if s.day is not None else 7)
 
-    teachers_cache = {u.id: u.fullname or '' for u in User.collection.filter('status', '==', 'Teacher').fetch(200)}
+    teachers_cache = _build_teachers_cache({s.teacher_id for s in schedules})
     return Response({
         'group_name': group.name or '',
         'schedules':  [
@@ -482,6 +537,8 @@ def admin_create_notification(request):
 @admin_required
 def admin_list_notifications(request):
     filter_status = request.GET.get('status', '').strip()
+    limit, offset = _pagination_params(request)
+
     if filter_status:
         if filter_status not in VALID_STATUSES:
             return Response(
@@ -494,20 +551,16 @@ def admin_list_notifications(request):
     else:
         notifications = list(Notification.collection.fetch(500))
 
-    notifications.sort(key=lambda n: str(n.created_at or ''), reverse=True)
-    return Response({
-        'total':         len(notifications),
-        'notifications': [_notif_dict(n) for n in notifications],
-    })
+    notifications.sort(key=lambda n: n.created_at or datetime.min, reverse=True)
+    total = len(notifications)
+    page  = notifications[offset:offset + limit]
+    return Response({'total': total, 'notifications': [_notif_dict(n) for n in page]})
 
 
 @api_view(['GET'])
 @admin_required
 def admin_get_notification(request, notif_id):
-    try:
-        notif = Notification.collection.get(f'notifications/{notif_id}')
-    except Exception:
-        notif = None
+    notif = _get_notification(notif_id)
     if not notif:
         return Response({'error': 'Уведомление не найдено'}, status=status.HTTP_404_NOT_FOUND)
     return Response({'notification': _notif_dict(notif)})
@@ -516,10 +569,7 @@ def admin_get_notification(request, notif_id):
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_notification(request, notif_id):
-    try:
-        notif = Notification.collection.get(f'notifications/{notif_id}')
-    except Exception:
-        notif = None
+    notif = _get_notification(notif_id)
     if not notif:
         return Response({'error': 'Уведомление не найдено'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -553,11 +603,12 @@ def admin_edit_notification(request, notif_id):
                 {'error': f'Максимум {MAX_NOTIF_IMAGES} изображений'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        for item in (notif.images or []):
-            delete_file(item.get('file_id', ''))
+        # Upload new images first — only delete old ones after successful upload
         new_images, err = _upload_notif_images(image_files)
         if err:
             return err
+        for item in (notif.images or []):
+            delete_file(item.get('file_id', ''))
         notif.images = new_images
         updated_fields.append('images')
 
@@ -575,10 +626,7 @@ def admin_edit_notification(request, notif_id):
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_notification(request, notif_id):
-    try:
-        notif = Notification.collection.get(f'notifications/{notif_id}')
-    except Exception:
-        notif = None
+    notif = _get_notification(notif_id)
     if not notif:
         return Response({'error': 'Уведомление не найдено'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -599,11 +647,11 @@ def get_my_notifications(request):
     if not user_status:
         return Response({'error': 'Статус пользователя не определён'}, status=status.HTTP_400_BAD_REQUEST)
 
+    limit, offset = _pagination_params(request)
     notifications = list(
-        Notification.collection.filter('target_statuses', 'array_contains', user_status).fetch(200)
+        Notification.collection.filter('target_statuses', 'array_contains', user_status).fetch(500)
     )
-    notifications.sort(key=lambda n: str(n.created_at or ''), reverse=True)
-    return Response({
-        'total':         len(notifications),
-        'notifications': [_notif_dict(n) for n in notifications],
-    })
+    notifications.sort(key=lambda n: n.created_at or datetime.min, reverse=True)
+    total = len(notifications)
+    page  = notifications[offset:offset + limit]
+    return Response({'total': total, 'notifications': [_notif_dict(n) for n in page]})
