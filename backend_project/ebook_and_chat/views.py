@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
@@ -5,12 +6,16 @@ from rest_framework import status
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_book_cover, upload_book_file, delete_file
 from .models import Book, VALID_GENRES
+from .serializers import BookSerializer
 
 
 ALLOWED_COVER_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
 ALLOWED_FILE_TYPES  = {'application/pdf', 'application/epub+zip'}
 MAX_COVER_SIZE = 2 * 1024 * 1024
 MAX_FILE_SIZE  = 100 * 1024 * 1024
+BOOKS_CACHE_TTL = 300  # 5 минут
+
+_ALL_CACHE_KEYS = ['books_list_'] + [f'books_list_{g}' for g in VALID_GENRES]
 
 
 def _validate_file(f, allowed_types, max_size, type_error, size_error):
@@ -32,36 +37,15 @@ def _upload(file_obj, upload_fn, filename, error_label):
         )
 
 
-def _replace_drive_file(file_obj, old_id, upload_fn, filename, error_label):
-    result, err = _upload(file_obj, upload_fn, filename, error_label)
-    if err:
-        return None, None, err
-    file_id, url = result
-    if old_id:
-        delete_file(old_id)
-    return file_id, url, None
+def _get_book(book_id: str):
+    try:
+        return Book.collection.get(f'books/{book_id}')
+    except Exception:
+        return None
 
 
-def _book_dict(book) -> dict:
-    return {
-        'id':              book.id,
-        'title_taj':       book.title_taj or '',
-        'title_rus':       book.title_rus or '',
-        'title_eng':       book.title_eng or '',
-        'title_kor':       book.title_kor or '',
-        'description_taj': book.description_taj or '',
-        'description_rus': book.description_rus or '',
-        'description_eng': book.description_eng or '',
-        'description_kor': book.description_kor or '',
-        'author':          book.author or '',
-        'genres':          book.genres or '',
-        'published_date':  book.published_date or '',
-        'created_at':      str(book.created_at) if book.created_at else '',
-        'cover':           book.cover or '',
-        'cover_id':        book.cover_id or '',
-        'file':            book.file or '',
-        'file_id':         book.file_id or '',
-    }
+def _invalidate_books_cache():
+    cache.delete_many(_ALL_CACHE_KEYS)
 
 
 # ---------------------------------------------------------------------------
@@ -112,28 +96,35 @@ def admin_create_book(request):
                   'description_taj', 'description_rus', 'description_eng', 'description_kor',
                   'author', 'published_date'):
         setattr(book, field, data.get(field, '').strip())
-    book.genres     = genres
-    book.cover      = cover_url
-    book.cover_id   = cover_id
-    book.file       = file_url
-    book.file_id    = file_id
-    book.save()
+    book.genres   = genres
+    book.cover    = cover_url
+    book.cover_id = cover_id
+    book.file     = file_url
+    book.file_id  = file_id
 
-    return Response({'message': 'Книга успешно добавлена', 'book': _book_dict(book)}, status=status.HTTP_201_CREATED)
+    try:
+        book.save()
+    except Exception as e:
+        delete_file(file_id)
+        if cover_id:
+            delete_file(cover_id)
+        return Response({'error': f'Ошибка сохранения: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    _invalidate_books_cache()
+    return Response({'message': 'Книга успешно добавлена', 'book': BookSerializer(book).data}, status=status.HTTP_201_CREATED)
 
 
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_book(request, book_id):
-    try:
-        book = Book.collection.get(f'books/{book_id}')
-    except Exception:
-        book = None
+    book = _get_book(book_id)
     if not book:
         return Response({'error': 'Книга не найдена'}, status=status.HTTP_404_NOT_FOUND)
 
     data = request.data
     updated_fields = []
+    new_file_ids = []   # загружены в этом запросе; удалить при ошибке сохранения
+    old_file_ids = []   # удалить после успешного сохранения
 
     for field in ('title_taj', 'title_rus', 'title_eng', 'title_kor',
                   'description_taj', 'description_rus', 'description_eng', 'description_kor',
@@ -155,12 +146,16 @@ def admin_edit_book(request, book_id):
                                  'Допустимые форматы обложки: JPEG, PNG, WEBP',
                                  'Обложка слишком большая. Максимум 2 МБ'):
             return err
-        cover_id, cover_url, err = _replace_drive_file(
-            cover_file, book.cover_id, upload_book_cover, f'cover_{book_id}', 'обложки')
+        result, err = _upload(cover_file, upload_book_cover, f'cover_{book_id}', 'обложки')
         if err:
+            for fid in new_file_ids:
+                delete_file(fid)
             return err
+        new_cover_id, cover_url = result
+        new_file_ids.append(new_cover_id)
+        old_file_ids.append(book.cover_id)
         book.cover    = cover_url
-        book.cover_id = cover_id
+        book.cover_id = new_cover_id
         updated_fields.extend(['cover', 'cover_id'])
 
     book_file = request.FILES.get('file')
@@ -168,30 +163,45 @@ def admin_edit_book(request, book_id):
         if err := _validate_file(book_file, ALLOWED_FILE_TYPES, MAX_FILE_SIZE,
                                  'Допустимые форматы книги: PDF, EPUB',
                                  'Файл книги слишком большой. Максимум 100 МБ'):
+            for fid in new_file_ids:
+                delete_file(fid)
             return err
-        file_id, file_url, err = _replace_drive_file(
-            book_file, book.file_id, upload_book_file, f'book_{book_id}', 'файла книги')
+        result, err = _upload(book_file, upload_book_file, f'book_{book_id}', 'файла книги')
         if err:
+            for fid in new_file_ids:
+                delete_file(fid)
             return err
+        new_file_id, file_url = result
+        new_file_ids.append(new_file_id)
+        old_file_ids.append(book.file_id)
         book.file    = file_url
-        book.file_id = file_id
+        book.file_id = new_file_id
         updated_fields.extend(['file', 'file_id'])
 
     if not updated_fields:
         return Response({'message': 'Нет данных для обновления'}, status=status.HTTP_400_BAD_REQUEST)
 
-    book.update()
-    return Response({'message': 'Книга обновлена', 'updated_fields': updated_fields, 'book': _book_dict(book)})
+    try:
+        book.update()
+    except Exception as e:
+        # Сохранение не удалось — откатываем новые файлы с Drive
+        for fid in new_file_ids:
+            delete_file(fid)
+        return Response({'error': f'Ошибка сохранения: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # БД обновлена успешно — теперь удаляем старые файлы
+    for fid in old_file_ids:
+        if fid:
+            delete_file(fid)
+
+    _invalidate_books_cache()
+    return Response({'message': 'Книга обновлена', 'updated_fields': updated_fields, 'book': BookSerializer(book).data})
 
 
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_book(request, book_id):
-    """Удалить книгу (только для Admin). Файлы удаляются с Google Drive."""
-    try:
-        book = Book.collection.get(f'books/{book_id}')
-    except Exception:
-        book = None
+    book = _get_book(book_id)
     if not book:
         return Response({'error': 'Книга не найдена'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -201,6 +211,7 @@ def admin_delete_book(request, book_id):
         delete_file(book.file_id)
 
     Book.collection.delete(f'books/{book_id}')
+    _invalidate_books_cache()
     return Response({'message': 'Книга удалена'})
 
 
@@ -211,32 +222,50 @@ def admin_delete_book(request, book_id):
 @api_view(['GET'])
 @jwt_required
 def list_books(request):
-    """Список всех книг.
-    Query params (необязательные):
-      ?genres=Книги Sejong|Книги Topik|Художественная литература
+    """Список книг с пагинацией.
+    Query params:
+      ?genres=  — фильтр по жанру
+      ?limit=   — кол-во книг (по умолчанию 100, макс 500)
+      ?offset=  — смещение (по умолчанию 0)
     """
     genre_filter = request.query_params.get('genres', '').strip()
 
-    if genre_filter:
-        books = list(Book.collection.filter('genres', '==', genre_filter).fetch(200))
-    else:
-        books = list(Book.collection.fetch(200))
+    try:
+        limit  = min(int(request.query_params.get('limit', 100)), 500)
+        offset = max(int(request.query_params.get('offset', 0)), 0)
+    except ValueError:
+        return Response(
+            {'error': 'Параметры limit и offset должны быть целыми числами'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    cache_key = f'books_list_{genre_filter}'
+    books_data = cache.get(cache_key)
+
+    if books_data is None:
+        if genre_filter:
+            qs = list(Book.collection.filter('genres', '==', genre_filter).fetch(1000))
+        else:
+            qs = list(Book.collection.fetch(1000))
+        books_data = BookSerializer(qs, many=True).data
+        cache.set(cache_key, books_data, BOOKS_CACHE_TTL)
+
+    total = len(books_data)
+    page  = books_data[offset: offset + limit]
 
     return Response({
-        'total': len(books),
-        'books': [_book_dict(b) for b in books],
+        'total':  total,
+        'limit':  limit,
+        'offset': offset,
+        'books':  page,
     })
 
 
 @api_view(['GET'])
 @jwt_required
 def get_book(request, book_id):
-    """Получить одну книгу по ID."""
-    try:
-        book = Book.collection.get(f'books/{book_id}')
-    except Exception:
-        book = None
+    book = _get_book(book_id)
     if not book:
         return Response({'error': 'Книга не найдена'}, status=status.HTTP_404_NOT_FOUND)
 
-    return Response({'book': _book_dict(book)})
+    return Response({'book': BookSerializer(book).data})

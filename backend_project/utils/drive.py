@@ -1,4 +1,6 @@
 import io
+import threading
+
 from django.conf import settings
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -6,19 +8,29 @@ from googleapiclient.http import MediaIoBaseUpload
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
+_service = None
+_service_lock = threading.Lock()
+_folder_id_cache: dict[str, str] = {}
+
 
 def _get_service():
-    credentials = service_account.Credentials.from_service_account_file(
-        settings.GOOGLE_DRIVE_CREDENTIALS,
-        scopes=SCOPES,
-    )
-    return build('drive', 'v3', credentials=credentials)
+    global _service
+    if _service is None:
+        with _service_lock:
+            if _service is None:
+                credentials = service_account.Credentials.from_service_account_file(
+                    settings.GOOGLE_DRIVE_CREDENTIALS,
+                    scopes=SCOPES,
+                )
+                _service = build('drive', 'v3', credentials=credentials)
+    return _service
 
 
 def _get_or_create_folder(service, path: str) -> str:
-    """Находит или создаёт цепочку папок по пути (например 'Sejong Cloud/book/files').
-    Работает в Drive сервисного аккаунта. Возвращает ID финальной папки.
-    """
+    """Находит или создаёт цепочку папок по пути. Результат кэшируется в памяти процесса."""
+    if path in _folder_id_cache:
+        return _folder_id_cache[path]
+
     parts = [p for p in path.strip('/').split('/') if p]
     parent_id = 'root'
 
@@ -45,13 +57,12 @@ def _get_or_create_folder(service, path: str) -> str:
             ).execute()
             parent_id = folder['id']
 
+    _folder_id_cache[path] = parent_id
     return parent_id
 
 
 def _upload_to_path(file_obj, folder_path: str, filename: str, mime_type: str, resumable: bool = False) -> tuple[str, str]:
-    """Загружает файл в папку по пути на Drive сервисного аккаунта.
-    Возвращает (file_id, public_url).
-    """
+    """Загружает файл в папку по пути на Drive. Возвращает (file_id, public_url)."""
     service = _get_service()
     folder_id = _get_or_create_folder(service, folder_path)
 
@@ -78,6 +89,14 @@ def _upload_to_path(file_obj, folder_path: str, filename: str, mime_type: str, r
     return file_id, url
 
 
+def delete_file(file_id: str) -> None:
+    """Удалить любой файл с Google Drive по ID."""
+    try:
+        _get_service().files().delete(fileId=file_id).execute()
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Аватары
 # ---------------------------------------------------------------------------
@@ -88,10 +107,7 @@ def upload_avatar(file_obj, filename: str, mime_type: str) -> tuple[str, str]:
 
 
 def delete_avatar(file_id: str) -> None:
-    try:
-        _get_service().files().delete(fileId=file_id).execute()
-    except Exception:
-        pass
+    delete_file(file_id)
 
 
 # ---------------------------------------------------------------------------
@@ -106,14 +122,6 @@ def upload_book_cover(file_obj, filename: str, mime_type: str) -> tuple[str, str
 def upload_book_file(file_obj, filename: str, mime_type: str) -> tuple[str, str]:
     """Загрузить файл книги (PDF/EPUB). Возвращает (file_id, public_url)."""
     return _upload_to_path(file_obj, 'Sejong Cloud/book/files', filename, mime_type, resumable=True)
-
-
-def delete_file(file_id: str) -> None:
-    """Удалить любой файл с Google Drive по ID."""
-    try:
-        _get_service().files().delete(fileId=file_id).execute()
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------

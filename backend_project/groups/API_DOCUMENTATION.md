@@ -25,22 +25,32 @@ Authorization: Bearer <admin_token>
 ---
 
 ### GET `/admin/`
-Список всех учебных групп.
+Список всех учебных групп с пагинацией.
 
 **Headers:**
 ```
 Authorization: Bearer <admin_token>
 ```
 
+**Query params:**
+
+| Параметр | Тип | По умолчанию | Максимум | Описание |
+|----------|-----|-------------|---------|----------|
+| `limit`  | int | 20          | 100     | Количество групп в ответе |
+
 **Успех — 200:**
 ```json
 {
+    "total": 2,
+    "has_more": false,
     "groups": [
-        { "id": "groups/AbCdEf...", "name": "CS-101" },
-        { "id": "groups/XyZwVu...", "name": "CS-102" }
+        { "id": "AbCdEf...", "name": "CS-101" },
+        { "id": "XyZwVu...", "name": "CS-102" }
     ]
 }
 ```
+
+> Если `has_more: true` — запросите следующую страницу с увеличенным `limit`.
 
 ---
 
@@ -61,7 +71,7 @@ Authorization: Bearer <admin_token>
 ```json
 {
     "message": "Группа \"CS-101\" создана.",
-    "group": { "id": "groups/AbCdEf...", "name": "CS-101" }
+    "group": { "id": "AbCdEf...", "name": "CS-101" }
 }
 ```
 
@@ -77,18 +87,87 @@ Authorization: Bearer <admin_token>
 ---
 
 ### DELETE `/admin/<group_id>/delete/`
-Удалить группу по ID.
+Удалить группу по ID. У всех участников группы поле `group` автоматически очищается.
 
 **Headers:**
 ```
 Authorization: Bearer <admin_token>
 ```
 
-**Body:** не требуется
-
 **Успех — 200:**
 ```json
 { "message": "Группа \"CS-101\" удалена." }
+```
+
+**Ошибки:**
+```json
+// 404
+{ "error": "Группа не найдена" }
+```
+
+---
+
+### PATCH `/admin/<group_id>/rename/`
+Переименовать группу. Новое имя должно быть уникальным.
+
+**Headers:**
+```
+Authorization: Bearer <admin_token>
+```
+
+**Body (JSON):**
+```json
+{ "name": "CS-103" }
+```
+
+**Успех — 200:**
+```json
+{
+    "message": "Группа переименована.",
+    "group": { "id": "AbCdEf...", "name": "CS-103" }
+}
+```
+
+**Ошибки:**
+```json
+// 400 — name не передан
+{ "error": "Поле \"name\" обязательно" }
+
+// 400 — имя занято
+{ "error": "Группа с именем \"CS-103\" уже существует" }
+
+// 404
+{ "error": "Группа не найдена" }
+```
+
+---
+
+### GET `/admin/<group_id>/members/`
+Список всех участников группы.
+
+**Headers:**
+```
+Authorization: Bearer <admin_token>
+```
+
+**Успех — 200:**
+```json
+{
+    "group": { "id": "AbCdEf...", "name": "CS-101" },
+    "total": 2,
+    "members": [
+        {
+            "id": "users/mMplMaUG...",
+            "username": "john_doe",
+            "fullname": "John Doe",
+            "email": "john@example.com",
+            "phone_number": "+992991234567",
+            "status": "Student",
+            "verification_status": "Approved",
+            "group": "CS-101"
+        }
+    ]
+}
 ```
 
 **Ошибки:**
@@ -109,7 +188,7 @@ Authorization: Bearer <admin_token>
 
 **Body (JSON):**
 ```json
-{ "group_id": "groups/AbCdEf..." }
+{ "group_id": "AbCdEf..." }
 ```
 
 > `group_id` берётся из ответа `GET /admin/` — поле `"id"`.
@@ -136,8 +215,44 @@ Authorization: Bearer <admin_token>
 // 400 — group_id не передан
 { "error": "Поле \"group_id\" обязательно" }
 
+// 404 — пользователь не найден
+{ "error": "Пользователь не найден" }
+
 // 404 — группа не найдена
 { "error": "Группа не найдена" }
+```
+
+---
+
+### DELETE `/admin/unassign/<user_id>/`
+Убрать пользователя из группы.
+
+**Headers:**
+```
+Authorization: Bearer <admin_token>
+```
+
+**Успех — 200:**
+```json
+{
+    "message": "Пользователь удалён из группы.",
+    "user": {
+        "id": "users/mMplMaUG...",
+        "username": "john_doe",
+        "fullname": "John Doe",
+        "email": "john@example.com",
+        "phone_number": "+992991234567",
+        "status": "Student",
+        "verification_status": "Approved",
+        "group": ""
+    }
+}
+```
+
+**Ошибки:**
+```json
+// 400 — пользователь не состоит в группе
+{ "error": "Пользователь не состоит ни в одной группе" }
 
 // 404 — пользователь не найден
 { "error": "Пользователь не найден" }
