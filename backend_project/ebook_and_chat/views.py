@@ -5,6 +5,7 @@ from rest_framework import status
 
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_book_cover, upload_book_file, delete_file
+from audit_logs.utils import log_action
 from .models import Book, VALID_GENRES
 from .serializers import BookSerializer
 
@@ -110,6 +111,7 @@ def admin_create_book(request):
             delete_file(cover_id)
         return Response({'error': f'Ошибка сохранения: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    log_action(request, 'create', 'Book', book.id, {'title_rus': book.title_rus or '', 'genres': book.genres or ''})
     _invalidate_books_cache()
     return Response({'message': 'Книга успешно добавлена', 'book': BookSerializer(book).data}, status=status.HTTP_201_CREATED)
 
@@ -194,6 +196,7 @@ def admin_edit_book(request, book_id):
         if fid:
             delete_file(fid)
 
+    log_action(request, 'update', 'Book', book_id, {'updated_fields': updated_fields})
     _invalidate_books_cache()
     return Response({'message': 'Книга обновлена', 'updated_fields': updated_fields, 'book': BookSerializer(book).data})
 
@@ -211,6 +214,7 @@ def admin_delete_book(request, book_id):
         delete_file(book.file_id)
 
     Book.collection.delete(f'books/{book_id}')
+    log_action(request, 'delete', 'Book', book_id)
     _invalidate_books_cache()
     return Response({'message': 'Книга удалена'})
 

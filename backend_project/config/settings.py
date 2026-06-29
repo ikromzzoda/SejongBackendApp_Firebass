@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     "ebook_and_chat",
     "info",
     "announcements",
+    "audit_logs",
 ]
 
 MIDDLEWARE = [

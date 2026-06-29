@@ -7,6 +7,7 @@ from rest_framework import status
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_notification_image, delete_file
 from utils.fcm import send_notification_to_statuses
+from audit_logs.utils import log_action
 from users.models import User
 from groups.models import Group
 from .models import Schedule, Notification
@@ -226,6 +227,11 @@ def admin_create_schedule(request):
     sched.teacher_id = teacher.id
     sched.book       = book
     sched.save()
+    log_action(request, 'create', 'Schedule', sched.id, {
+        'group_name':   group.name,
+        'teacher_name': teacher.fullname,
+        'day':          day,
+    })
 
     return Response(
         {'message': 'Расписание создано', 'schedule': _schedule_dict(sched, group.name, teacher.fullname)},
@@ -354,6 +360,7 @@ def admin_edit_schedule(request, schedule_id):
         return Response({'message': 'Нет данных для обновления'}, status=status.HTTP_400_BAD_REQUEST)
 
     sched.update()
+    log_action(request, 'update', 'Schedule', schedule_id, {'updated_fields': updated_fields})
     group_name, teacher_name = _fetch_names(sched.group_id, sched.teacher_id)
     return Response({
         'message':        'Расписание обновлено',
@@ -369,6 +376,7 @@ def admin_delete_schedule(request, schedule_id):
     if not sched:
         return Response({'error': 'Расписание не найдено'}, status=status.HTTP_404_NOT_FOUND)
     Schedule.collection.delete(f'schedules/{schedule_id}')
+    log_action(request, 'delete', 'Schedule', schedule_id)
     return Response({'message': 'Расписание удалено'})
 
 
@@ -522,6 +530,10 @@ def admin_create_notification(request):
     notif.images          = images
     notif.target_statuses = list(dict.fromkeys(raw_statuses))  # deduplicate, preserve order
     notif.save()
+    log_action(request, 'create', 'Notification', notif.id, {
+        'title_rus':       notif.title_rus or '',
+        'target_statuses': notif.target_statuses or [],
+    })
 
     title = (notif.title_rus or notif.title_eng or notif.title_taj or notif.title_kor or 'Уведомление')
     body  = (notif.content_rus or notif.content_eng or notif.content_taj or notif.content_kor or '')
@@ -616,6 +628,7 @@ def admin_edit_notification(request, notif_id):
         return Response({'message': 'Нет данных для обновления'}, status=status.HTTP_400_BAD_REQUEST)
 
     notif.update()
+    log_action(request, 'update', 'Notification', notif_id, {'updated_fields': updated_fields})
     return Response({
         'message':        'Уведомление обновлено',
         'updated_fields': updated_fields,
@@ -633,6 +646,7 @@ def admin_delete_notification(request, notif_id):
     for item in (notif.images or []):
         delete_file(item.get('file_id', ''))
     Notification.collection.delete(f'notifications/{notif_id}')
+    log_action(request, 'delete', 'Notification', notif_id)
     return Response({'message': 'Уведомление удалено'})
 
 

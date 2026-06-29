@@ -19,6 +19,7 @@ from groups.models import Group
 from utils.jwt_utils import generate_token, generate_refresh_token, decode_token
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_avatar, delete_avatar
+from audit_logs.utils import log_action
 
 
 PHONE_RE = re.compile(r'^\+992\d{9}$')
@@ -438,6 +439,7 @@ def admin_edit_user(request, user_id):
         return Response({'message': 'Нет данных для обновления'}, status=status.HTTP_400_BAD_REQUEST)
 
     user.update()
+    log_action(request, 'update', 'User', user_id, {'updated_fields': updated_fields})
     return Response({
         'message': 'Данные пользователя обновлены',
         'updated_fields': updated_fields,
@@ -472,6 +474,10 @@ def admin_verify_user(request, user_id):
         user.verification_status = 'Rejected'
 
     user.update()
+    log_action(request, 'update', 'User', user_id, {
+        'verification_action': action,
+        'verification_status': user.verification_status,
+    })
     return Response({
         'message': f'Пользователь {"подтверждён" if action == "approve" else "отклонён"}.',
         'user': _user_dict(user),
@@ -500,6 +506,7 @@ def admin_set_status(request, user_id):
 
     user.status = new_status
     user.update()
+    log_action(request, 'update', 'User', user_id, {'new_status': new_status})
     return Response({
         'message': f'Статус пользователя изменён на "{new_status}".',
         'user': _user_dict(user),
@@ -560,6 +567,10 @@ def admin_create_user(request):
     user.avatar        = data.get('avatar', DEFAULT_AVATAR)
     user.verification_status = 'Approved'
     user.save()
+    log_action(request, 'create', 'User', user.id, {
+        'username': user.username,
+        'status':   user.status,
+    })
 
     return Response({
         'message': f'Пользователь "{user.username}" успешно создан.',
@@ -865,6 +876,11 @@ def admin_bulk_import(request):
 
     success_count = sum(1 for r in results if r[6] == 'Успешно')
     error_count   = len(results) - success_count
+    log_action(request, 'create', 'User', 'bulk_import', {
+        'total':   len(results),
+        'success': success_count,
+        'errors':  error_count,
+    })
 
     ws_out.append([])
     ws_out.append(['', f'Итого: {len(results)} строк | Успешно: {success_count} | Ошибок: {error_count}'])

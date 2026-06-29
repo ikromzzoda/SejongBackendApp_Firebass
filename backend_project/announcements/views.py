@@ -6,6 +6,7 @@ from rest_framework import status
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_announcement_image, delete_file
 from utils.fcm import send_notification_to_statuses
+from audit_logs.utils import log_action
 from info.models import Notification
 from .models import Announcement
 
@@ -136,6 +137,10 @@ def admin_create_announcement(request):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
+    log_action(request, 'create', 'Announcement', ann.id, {
+        'title_rus': ann.title_rus or '',
+        'title_taj': ann.title_taj or '',
+    })
     _create_notification(ann, images)
 
     title = ann.title_rus or ann.title_eng or ann.title_taj or ann.title_kor or 'Объявление'
@@ -187,6 +192,7 @@ def admin_edit_announcement(request, ann_id):
         return Response({'message': 'Нет данных для обновления'}, status=status.HTTP_400_BAD_REQUEST)
 
     ann.update()
+    log_action(request, 'update', 'Announcement', ann_id, {'updated_fields': updated_fields})
     _invalidate_cache()
     return Response({'message': 'Объявление обновлено', 'updated_fields': updated_fields, 'announcement': _ann_dict(ann)})
 
@@ -202,6 +208,7 @@ def admin_delete_announcement(request, ann_id):
         delete_file(item.get('file_id', ''))
 
     Announcement.collection.delete(f'announcements/{ann_id}')
+    log_action(request, 'delete', 'Announcement', ann_id)
     _invalidate_cache()
     return Response({'message': 'Объявление удалено'})
 

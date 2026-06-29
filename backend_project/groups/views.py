@@ -5,6 +5,7 @@ from rest_framework import status
 from .models import Group
 from users.models import User
 from utils.decorators import admin_required
+from audit_logs.utils import log_action
 
 
 def _user_dict(user, group_name: str = ''):
@@ -68,6 +69,7 @@ def admin_create_group(request):
     group = Group()
     group.name = name
     group.save()
+    log_action(request, 'create', 'Group', group.id, {'name': name})
     return Response(
         {'message': f'Группа "{name}" создана.', 'group': {'id': group.id, 'name': group.name}},
         status=status.HTTP_201_CREATED,
@@ -87,6 +89,7 @@ def admin_delete_group(request, group_id):
         member.update()
 
     Group.collection.delete(f'groups/{group_id}')
+    log_action(request, 'delete', 'Group', group_id, {'name': group.name})
     return Response({'message': f'Группа "{group.name}" удалена.'})
 
 
@@ -107,6 +110,7 @@ def admin_rename_group(request, group_id):
 
     group.name = new_name
     group.update()
+    log_action(request, 'update', 'Group', group_id, {'new_name': new_name})
     return Response({'message': 'Группа переименована.', 'group': {'id': group.id, 'name': group.name}})
 
 
@@ -142,6 +146,7 @@ def admin_assign_group(request, user_id):
 
     user.group = group_id
     user.update()
+    log_action(request, 'update', 'User', user_id, {'assigned_group': group_id, 'group_name': group.name})
     return Response({
         'message': f'Пользователь добавлен в группу "{group.name}".',
         'user': _user_dict(user, group_name=group.name),
@@ -163,4 +168,5 @@ def admin_remove_from_group(request, user_id):
 
     user.group = ''
     user.update()
+    log_action(request, 'update', 'User', user_id, {'removed_from_group': True})
     return Response({'message': 'Пользователь удалён из группы.', 'user': _user_dict(user)})
