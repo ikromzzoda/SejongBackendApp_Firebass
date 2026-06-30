@@ -13,7 +13,7 @@ Authorization: Bearer <token>
 | Уровень доступа | Эндпоинты |
 |-----------------|-----------|
 | Admin | Все `/admin/*` |
-| Любой авторизованный | `GET /schedules/*`, `GET /notifications/` |
+| Любой авторизованный | `GET /schedules/*`, `GET /notifications/`, `GET /privacy/` |
 
 ```json
 // 401 — токен не передан или недействителен
@@ -57,6 +57,11 @@ Authorization: Bearer <token>
 | PATCH | `/admin/notifications/<id>/edit/` | Admin | Редактировать уведомление |
 | DELETE | `/admin/notifications/<id>/delete/` | Admin | Удалить уведомление |
 | GET | `/notifications/` | Авторизованный | Мои уведомления (с пагинацией) |
+| POST | `/admin/privacy/create/` | Admin | Создать раздел политики |
+| GET | `/admin/privacy/` | Admin | Список всех разделов |
+| PATCH | `/admin/privacy/<id>/edit/` | Admin | Редактировать раздел |
+| DELETE | `/admin/privacy/<id>/delete/` | Admin | Удалить раздел |
+| GET | `/privacy/` | Авторизованный | Политика конфиденциальности |
 
 ---
 
@@ -467,6 +472,158 @@ Content-Type: application/json
 
 ---
 
+## Политика конфиденциальности
+
+### Объект раздела
+
+```json
+{
+    "id": "privacy_sections/AbCdEf123",
+    "title_taj": "Маълумоти шахсӣ",
+    "title_rus": "Персональные данные",
+    "title_eng": "Personal Data",
+    "title_kor": "개인 데이터",
+    "content_taj": "Мо маълумоти зеринро ҷамъ мекунем...",
+    "content_rus": "Мы собираем следующие данные...",
+    "content_eng": "We collect the following data...",
+    "content_kor": "우리는 다음 데이터를 수집합니다...",
+    "order": 1,
+    "updated_at": "2026-06-30 10:00:00"
+}
+```
+
+> Поля `title_*` / `content_*` — мультиязычные: `taj`=таджикский, `rus`=русский, `eng`=английский, `kor`=корейский.  
+> `order` — порядок отображения разделов (меньше = выше). Разделы сортируются по `order`, затем по `updated_at`.
+
+---
+
+### POST `/admin/privacy/create/`
+
+Создать новый раздел политики конфиденциальности.
+
+**Body (JSON):**
+
+| Поле | Тип | Обязательное | Описание |
+|------|-----|:---:|----------|
+| `title_taj` | string | ❌ | Заголовок (таджикский) |
+| `title_rus` | string | ❌ | Заголовок (русский) |
+| `title_eng` | string | ❌ | Заголовок (английский) |
+| `title_kor` | string | ❌ | Заголовок (корейский) |
+| `content_taj` | string | ❌ | Текст (таджикский) |
+| `content_rus` | string | ❌ | Текст (русский) |
+| `content_eng` | string | ❌ | Текст (английский) |
+| `content_kor` | string | ❌ | Текст (корейский) |
+| `order` | int | ❌ | Порядок отображения (по умолч. `0`) |
+
+> Хотя бы одно поле `title_*` и одно поле `content_*` обязательны.
+
+```json
+// Запрос
+{
+    "title_rus": "Сбор данных",
+    "title_eng": "Data Collection",
+    "content_rus": "Мы собираем имя, email и номер телефона.",
+    "content_eng": "We collect name, email and phone number.",
+    "order": 1
+}
+
+// 201 — успех
+{
+    "message": "Раздел политики конфиденциальности создан",
+    "section": { ... }
+}
+```
+
+**Ошибки:**
+
+| Код | Описание | Ответ |
+|-----|----------|-------|
+| 400 | Нет ни одного заголовка | `{"error": "Хотя бы одно поле заголовка обязательно (title_taj / title_rus / title_eng / title_kor)"}` |
+| 400 | Нет ни одного текста | `{"error": "Хотя бы одно поле содержимого обязательно (content_taj / content_rus / content_eng / content_kor)"}` |
+| 400 | Неверный тип `order` | `{"error": "Поле \"order\" должно быть числом"}` |
+
+---
+
+### GET `/admin/privacy/`
+
+Список всех разделов политики, отсортированных по `order`, затем по `updated_at`.
+
+```json
+// 200 — успех
+{
+    "total": 5,
+    "sections": [ { ... }, { ... } ]
+}
+```
+
+---
+
+### PATCH `/admin/privacy/<section_id>/edit/`
+
+Изменить раздел. Передаются только изменяемые поля.
+
+**Body (JSON, все поля необязательные):**
+
+```json
+{
+    "title_rus": "Обновлённый заголовок",
+    "content_rus": "Обновлённый текст раздела.",
+    "order": 2
+}
+
+// 200 — успех
+{
+    "message": "Раздел обновлён",
+    "updated_fields": ["title_rus", "content_rus", "order"],
+    "section": { ... }
+}
+```
+
+**Ошибки:**
+
+| Код | Описание |
+|-----|----------|
+| 400 | Нет данных для обновления / неверный тип `order` |
+| 404 | Раздел не найден |
+
+---
+
+### DELETE `/admin/privacy/<section_id>/delete/`
+
+Удалить раздел политики.
+
+```json
+// 200 — успех
+{ "message": "Раздел удалён" }
+
+// 404
+{ "error": "Раздел не найден" }
+```
+
+---
+
+### GET `/privacy/`
+
+Получить всю политику конфиденциальности (для авторизованных пользователей). Разделы отсортированы по полю `order`.
+
+```json
+// 200 — успех
+{
+    "total": 5,
+    "sections": [
+        {
+            "id": "privacy_sections/AbCdEf",
+            "title_rus": "Сбор данных",
+            "content_rus": "...",
+            "order": 1,
+            "updated_at": "2026-06-30 10:00:00"
+        }
+    ]
+}
+```
+
+---
+
 ## FCM Push-уведомления
 
 Бэкенд отправляет FCM push автоматически при создании уведомления (`POST /admin/notifications/create/`).
@@ -553,5 +710,26 @@ Content-Type: application/json
 ### Мои уведомления (вторая страница)
 ```
 GET http://127.0.0.1:8000/api/info/notifications/?limit=20&offset=20
+Authorization: Bearer <token>
+```
+
+### Создать раздел политики конфиденциальности
+```
+POST http://127.0.0.1:8000/api/info/admin/privacy/create/
+Authorization: Bearer <admin_token>
+Content-Type: application/json
+
+{
+    "title_rus": "Сбор персональных данных",
+    "title_eng": "Personal Data Collection",
+    "content_rus": "Мы собираем следующие данные...",
+    "content_eng": "We collect the following data...",
+    "order": 1
+}
+```
+
+### Получить политику конфиденциальности (пользователь)
+```
+GET http://127.0.0.1:8000/api/info/privacy/
 Authorization: Bearer <token>
 ```

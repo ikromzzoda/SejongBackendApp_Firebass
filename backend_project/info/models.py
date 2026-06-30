@@ -32,3 +32,19 @@ class Notification(Model):
 
     class Meta:
         collection_name = 'notifications'
+
+
+class PrivacySection(Model):
+    title_taj   = TextField()
+    title_rus   = TextField()
+    title_eng   = TextField()
+    title_kor   = TextField()
+    content_taj = TextField()
+    content_rus = TextField()
+    content_eng = TextField()
+    content_kor = TextField()
+    order       = NumberField(int_only=True)   # порядок отображения
+    updated_at  = DateTime(auto=True)
+
+    class Meta:
+        collection_name = 'privacy_sections'

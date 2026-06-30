@@ -22,4 +22,13 @@ urlpatterns = [
 
     # Notifications — Authenticated users
     path('notifications/',                                views.get_my_notifications,      name='my-notifications'),
+
+    # Privacy Policy — Admin
+    path('admin/privacy/',                                    views.admin_list_privacy_sections,   name='admin-privacy-list'),
+    path('admin/privacy/create/',                             views.admin_create_privacy_section,  name='admin-privacy-create'),
+    path('admin/privacy/<str:section_id>/edit/',              views.admin_edit_privacy_section,    name='admin-privacy-edit'),
+    path('admin/privacy/<str:section_id>/delete/',            views.admin_delete_privacy_section,  name='admin-privacy-delete'),
+
+    # Privacy Policy — Public (authenticated)
+    path('privacy/',                                          views.get_privacy_policy,            name='privacy-policy'),
 ]

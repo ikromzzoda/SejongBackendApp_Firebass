@@ -10,7 +10,7 @@ from utils.fcm import send_notification_to_statuses
 from audit_logs.utils import log_action
 from users.models import User
 from groups.models import Group
-from .models import Schedule, Notification
+from .models import Schedule, Notification, PrivacySection
 
 
 VALID_DAYS         = {0, 1, 2, 3, 4, 5, 6}
@@ -669,3 +669,148 @@ def get_my_notifications(request):
     total = len(notifications)
     page  = notifications[offset:offset + limit]
     return Response({'total': total, 'notifications': [_notif_dict(n) for n in page]})
+
+
+# ---------------------------------------------------------------------------
+# Privacy Policy — helpers
+# ---------------------------------------------------------------------------
+
+PRIVACY_LANG_FIELDS = (
+    'title_taj', 'title_rus', 'title_eng', 'title_kor',
+    'content_taj', 'content_rus', 'content_eng', 'content_kor',
+)
+
+
+def _privacy_dict(section) -> dict:
+    return {
+        'id':          section.id,
+        'title_taj':   section.title_taj or '',
+        'title_rus':   section.title_rus or '',
+        'title_eng':   section.title_eng or '',
+        'title_kor':   section.title_kor or '',
+        'content_taj': section.content_taj or '',
+        'content_rus': section.content_rus or '',
+        'content_eng': section.content_eng or '',
+        'content_kor': section.content_kor or '',
+        'order':       section.order if section.order is not None else 0,
+        'updated_at':  str(section.updated_at) if section.updated_at else '',
+    }
+
+
+def _get_privacy_section(section_id):
+    try:
+        return PrivacySection.collection.get(f'privacy_sections/{section_id}')
+    except Exception:
+        return None
+
+
+def _sorted_sections():
+    sections = list(PrivacySection.collection.fetch(500))
+    sections.sort(key=lambda s: (s.order if s.order is not None else 0, s.updated_at or datetime.min))
+    return sections
+
+
+# ---------------------------------------------------------------------------
+# Privacy Policy — Admin endpoints
+# ---------------------------------------------------------------------------
+
+@api_view(['POST'])
+@admin_required
+def admin_create_privacy_section(request):
+    data = request.data
+
+    if not any(str(data.get(f'title_{lang}') or '').strip() for lang in ('taj', 'rus', 'eng', 'kor')):
+        return Response(
+            {'error': 'Хотя бы одно поле заголовка обязательно (title_taj / title_rus / title_eng / title_kor)'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not any(str(data.get(f'content_{lang}') or '').strip() for lang in ('taj', 'rus', 'eng', 'kor')):
+        return Response(
+            {'error': 'Хотя бы одно поле содержимого обязательно (content_taj / content_rus / content_eng / content_kor)'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        order = int(data.get('order', 0))
+    except (ValueError, TypeError):
+        return Response({'error': 'Поле "order" должно быть числом'}, status=status.HTTP_400_BAD_REQUEST)
+
+    section = PrivacySection()
+    for field in PRIVACY_LANG_FIELDS:
+        setattr(section, field, str(data.get(field) or '').strip())
+    section.order = order
+    section.save()
+
+    log_action(request, 'create', 'PrivacySection', section.id, {
+        'title_rus': section.title_rus or '',
+        'order':     order,
+    })
+    return Response(
+        {'message': 'Раздел политики конфиденциальности создан', 'section': _privacy_dict(section)},
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['PATCH'])
+@admin_required
+def admin_edit_privacy_section(request, section_id):
+    section = _get_privacy_section(section_id)
+    if not section:
+        return Response({'error': 'Раздел не найден'}, status=status.HTTP_404_NOT_FOUND)
+
+    data           = request.data
+    updated_fields = []
+
+    for field in PRIVACY_LANG_FIELDS:
+        if field in data:
+            setattr(section, field, str(data[field] or '').strip())
+            updated_fields.append(field)
+
+    if 'order' in data:
+        try:
+            section.order = int(data['order'])
+            updated_fields.append('order')
+        except (ValueError, TypeError):
+            return Response({'error': 'Поле "order" должно быть числом'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not updated_fields:
+        return Response({'message': 'Нет данных для обновления'}, status=status.HTTP_400_BAD_REQUEST)
+
+    section.update()
+    log_action(request, 'update', 'PrivacySection', section_id, {'updated_fields': updated_fields})
+    return Response({
+        'message':        'Раздел обновлён',
+        'updated_fields': updated_fields,
+        'section':        _privacy_dict(section),
+    })
+
+
+@api_view(['DELETE'])
+@admin_required
+def admin_delete_privacy_section(request, section_id):
+    section = _get_privacy_section(section_id)
+    if not section:
+        return Response({'error': 'Раздел не найден'}, status=status.HTTP_404_NOT_FOUND)
+
+    PrivacySection.collection.delete(f'privacy_sections/{section_id}')
+    log_action(request, 'delete', 'PrivacySection', section_id)
+    return Response({'message': 'Раздел удалён'})
+
+
+@api_view(['GET'])
+@admin_required
+def admin_list_privacy_sections(request):
+    sections = _sorted_sections()
+    return Response({'total': len(sections), 'sections': [_privacy_dict(s) for s in sections]})
+
+
+# ---------------------------------------------------------------------------
+# Privacy Policy — Public (authenticated) endpoint
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@jwt_required
+def get_privacy_policy(request):
+    sections = _sorted_sections()
+    return Response({'total': len(sections), 'sections': [_privacy_dict(s) for s in sections]})
