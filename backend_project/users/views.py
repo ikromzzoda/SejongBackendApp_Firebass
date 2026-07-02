@@ -5,7 +5,10 @@ import secrets
 import string
 import io
 import jwt as pyjwt
+from datetime import datetime, timedelta, timezone
+from django.conf import settings
 from django.contrib.auth.hashers import make_password, check_password
+from django.core.mail import send_mail
 from django.http import HttpResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -17,7 +20,13 @@ from openpyxl.utils import get_column_letter
 
 from .models import User, BlacklistedToken, DEFAULT_AVATAR
 from groups.models import Group
-from utils.jwt_utils import generate_token, generate_refresh_token, decode_token
+from utils.jwt_utils import (
+    generate_token,
+    generate_refresh_token,
+    generate_reset_token,
+    decode_token,
+    RESET_TOKEN_LIFETIME_MINUTES,
+)
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_avatar, delete_avatar
 from utils.schema import (
@@ -53,6 +62,10 @@ from .serializers import (
     ChangeAvatarRequestSerializer,
     ChangeAvatarResponseSerializer,
     BulkImportRequestSerializer,
+    ForgotPasswordRequestSerializer,
+    VerifyResetCodeRequestSerializer,
+    VerifyResetCodeResponseSerializer,
+    ResetPasswordRequestSerializer,
 )
 
 
@@ -319,6 +332,214 @@ def token_refresh(request):
         'token':         new_access,
         'refresh_token': new_refresh,
     })
+
+
+# ---------------------------------------------------------------------------
+# Password reset (забыли пароль)
+# ---------------------------------------------------------------------------
+
+RESET_CODE_LIFETIME_MINUTES = 15
+RESET_CODE_MAX_ATTEMPTS     = 5
+RESET_CODE_RESEND_SECONDS   = 600  # повторная отправка кода — не чаще раза в 10 минут
+
+# Единый ответ forgot-password: не раскрываем, зарегистрирован ли email
+FORGOT_PASSWORD_MESSAGE = 'Если такой email зарегистрирован, код отправлен на почту.'
+
+
+def _clear_reset_code(user):
+    user.reset_code_hash     = ''
+    user.reset_code_expires  = None
+    user.reset_code_attempts = 0
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Забыли пароль — отправить код',
+    description=(
+        'Отправляет 6-значный код на email пользователя. Код действует '
+        f'{RESET_CODE_LIFETIME_MINUTES} минут, повторная отправка — не чаще раза в '
+        f'{RESET_CODE_RESEND_SECONDS // 60} минут. Ответ одинаковый независимо от того, '
+        'существует ли email (защита от перебора).'
+    ),
+    request=ForgotPasswordRequestSerializer,
+    responses={
+        200: MessageResponseSerializer,
+        400: ErrorResponseSerializer,
+    },
+)
+@api_view(['POST'])
+def forgot_password(request):
+    email = (request.data.get('email') or '').strip()
+    if not email:
+        return Response({'error': 'Поле "email" обязательно'}, status=status.HTTP_400_BAD_REQUEST)
+
+    users = list(User.collection.filter('email', '==', email).fetch(1))
+    if not users:
+        return Response({'message': FORGOT_PASSWORD_MESSAGE})
+
+    user = users[0]
+    now  = datetime.now(timezone.utc)
+
+    # Rate limit: не отправляем новый код, если предыдущий ушёл меньше минуты назад
+    if user.reset_code_sent_at and (now - user.reset_code_sent_at).total_seconds() < RESET_CODE_RESEND_SECONDS:
+        return Response({'message': FORGOT_PASSWORD_MESSAGE})
+
+    code = f'{secrets.randbelow(1_000_000):06d}'
+    user.reset_code_hash     = make_password(code)
+    user.reset_code_expires  = now + timedelta(minutes=RESET_CODE_LIFETIME_MINUTES)
+    user.reset_code_attempts = 0
+    user.reset_code_sent_at  = now
+    user.update()
+
+    try:
+        send_mail(
+            subject='Sejong: код для сброса пароля',
+            message=(
+                f'Ваш код для сброса пароля: {code}\n\n'
+                f'Код действует {RESET_CODE_LIFETIME_MINUTES} минут.\n'
+                'Если вы не запрашивали сброс пароля, просто проигнорируйте это письмо.'
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception:
+        # Не раскрываем наружу проблемы SMTP; код остаётся валидным до истечения
+        pass
+
+    return Response({'message': FORGOT_PASSWORD_MESSAGE})
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Забыли пароль — проверить код',
+    description=(
+        'Проверяет 6-значный код из письма. При верном коде возвращает короткоживущий '
+        'reset_token для смены пароля. После '
+        f'{RESET_CODE_MAX_ATTEMPTS} неверных попыток код аннулируется — нужно запросить новый.'
+    ),
+    request=VerifyResetCodeRequestSerializer,
+    responses={
+        200: VerifyResetCodeResponseSerializer,
+        400: ErrorResponseSerializer,
+        429: ErrorResponseSerializer,
+    },
+)
+@api_view(['POST'])
+def verify_reset_code(request):
+    email = (request.data.get('email') or '').strip()
+    code  = (request.data.get('code') or '').strip()
+    if not email or not code:
+        return Response({'error': 'Поля "email" и "code" обязательны'}, status=status.HTTP_400_BAD_REQUEST)
+
+    users = list(User.collection.filter('email', '==', email).fetch(1))
+    user  = users[0] if users else None
+
+    if not user or not user.reset_code_hash:
+        return Response(
+            {'error': 'Код неверен или истёк. Запросите новый код.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    now = datetime.now(timezone.utc)
+    if not user.reset_code_expires or now > user.reset_code_expires:
+        _clear_reset_code(user)
+        user.update()
+        return Response(
+            {'error': 'Код истёк. Запросите новый код.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not check_password(code, user.reset_code_hash):
+        attempts = (user.reset_code_attempts or 0) + 1
+        if attempts >= RESET_CODE_MAX_ATTEMPTS:
+            _clear_reset_code(user)
+            user.update()
+            return Response(
+                {'error': 'Слишком много неверных попыток. Запросите новый код.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        user.reset_code_attempts = attempts
+        user.update()
+        return Response(
+            {'error': f'Неверный код. Осталось попыток: {RESET_CODE_MAX_ATTEMPTS - attempts}'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Код верный: аннулируем его и выдаём одноразовый reset-токен
+    reset_token, reset_jti = generate_reset_token(user.id)
+    _clear_reset_code(user)
+    user.reset_token_jti = reset_jti
+    user.update()
+
+    return Response({
+        'message': 'Код подтверждён. Установите новый пароль.',
+        'reset_token': reset_token,
+    })
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Забыли пароль — установить новый',
+    description=(
+        'Устанавливает новый пароль по reset_token из verify-code. Токен одноразовый и '
+        f'действует {RESET_TOKEN_LIFETIME_MINUTES} минут. После смены пароля все '
+        'refresh-токены пользователя отзываются.'
+    ),
+    request=ResetPasswordRequestSerializer,
+    responses={
+        200: MessageResponseSerializer,
+        400: ErrorResponseSerializer,
+        401: ErrorResponseSerializer,
+    },
+)
+@api_view(['POST'])
+def reset_password(request):
+    reset_token  = request.data.get('reset_token', '')
+    new_password = request.data.get('new_password', '')
+
+    if not reset_token or not new_password:
+        return Response(
+            {'error': 'Поля "reset_token" и "new_password" обязательны'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if len(new_password) < 6:
+        return Response(
+            {'error': 'Пароль должен содержать минимум 6 символов'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        payload = decode_token(reset_token)
+    except pyjwt.ExpiredSignatureError:
+        return Response(
+            {'error': 'Срок действия reset_token истёк. Запросите код заново.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    except pyjwt.InvalidTokenError:
+        return Response({'error': 'Недействительный reset_token'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    if payload.get('type') != 'reset':
+        return Response({'error': 'Недействительный reset_token'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        user = User.collection.get(f"users/{payload['user_id']}")
+    except Exception:
+        user = None
+    if not user or user.reset_token_jti != payload['jti']:
+        return Response(
+            {'error': 'Reset token недействителен или уже использован'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    user.password        = make_password(new_password)
+    user.reset_token_jti = ''
+    # Отзываем refresh-токены: после сброса пароля старые сессии недействительны
+    user.refresh_token_jti = ''
+    user.update()
+
+    return Response({'message': 'Пароль изменён. Войдите с новым паролем.'})
 
 
 # ---------------------------------------------------------------------------

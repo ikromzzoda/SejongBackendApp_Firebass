@@ -7,6 +7,11 @@ urlpatterns = [
     path('logout/',        views.logout,        name='user-logout'),
     path('token/refresh/', views.token_refresh, name='token-refresh'),
 
+    # Password reset (забыли пароль)
+    path('forgot-password/',        views.forgot_password,   name='forgot-password'),
+    path('forgot-password/verify/', views.verify_reset_code, name='forgot-password-verify'),
+    path('forgot-password/reset/',  views.reset_password,    name='forgot-password-reset'),
+
     # Admin — users
     path('admin/users/',                          views.admin_list_users,    name='admin-users-list'),
     path('admin/users/create/',                   views.admin_create_user,   name='admin-users-create'),

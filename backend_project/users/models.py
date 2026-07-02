@@ -1,5 +1,5 @@
 from fireo.models import Model
-from fireo.fields import TextField, DateTime
+from fireo.fields import TextField, DateTime, NumberField
 
 
 DEFAULT_AVATAR = "https://drive.google.com/uc?id=1FCfMdEvghunhDuKd1PWQqty_ZPZelqim"
@@ -34,6 +34,13 @@ class User(Model):
     )
     verification_status  = TextField(default='Pending')
     refresh_token_jti    = TextField()
+
+    # Сброс пароля: хранится только хэш 6-значного кода, сам код уходит на email
+    reset_code_hash     = TextField()
+    reset_code_expires  = DateTime()
+    reset_code_attempts = NumberField()
+    reset_code_sent_at  = DateTime()
+    reset_token_jti     = TextField()
 
     class Meta:
         collection_name = 'users'

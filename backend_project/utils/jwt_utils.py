@@ -4,8 +4,9 @@ from datetime import datetime, timedelta, timezone
 from django.conf import settings
 
 ALGORITHM = 'HS256'
-TOKEN_LIFETIME_DAYS         = 1
-REFRESH_TOKEN_LIFETIME_DAYS = 30
+TOKEN_LIFETIME_DAYS          = 1
+REFRESH_TOKEN_LIFETIME_DAYS  = 30
+RESET_TOKEN_LIFETIME_MINUTES = 10
 
 
 def generate_token(user_id: str, username: str, status: str, verification_status: str) -> str:
@@ -32,6 +33,20 @@ def generate_refresh_token(user_id: str) -> tuple[str, str]:
         'type': 'refresh',
         'iat':  now,
         'exp':  now + timedelta(days=REFRESH_TOKEN_LIFETIME_DAYS),
+        'jti':  jti,
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM), jti
+
+
+def generate_reset_token(user_id: str) -> tuple[str, str]:
+    """Короткоживущий токен для смены пароля после подтверждения кода. Returns (token, jti)."""
+    now = datetime.now(timezone.utc)
+    jti = str(uuid.uuid4())
+    payload = {
+        'user_id': user_id,
+        'type': 'reset',
+        'iat':  now,
+        'exp':  now + timedelta(minutes=RESET_TOKEN_LIFETIME_MINUTES),
         'jti':  jti,
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM), jti

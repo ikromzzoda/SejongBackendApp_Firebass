@@ -63,6 +63,11 @@ class TokenRefreshResponseSerializer(serializers.Serializer):
     refresh_token = serializers.CharField()
 
 
+class VerifyResetCodeResponseSerializer(serializers.Serializer):
+    message = serializers.CharField()
+    reset_token = serializers.CharField()
+
+
 class AdminListUsersResponseSerializer(serializers.Serializer):
     total = serializers.IntegerField()
     users = UserSerializer(many=True)
@@ -126,6 +131,20 @@ class LoginRequestSerializer(serializers.Serializer):
 
 class TokenRefreshRequestSerializer(serializers.Serializer):
     refresh_token = serializers.CharField()
+
+
+class ForgotPasswordRequestSerializer(serializers.Serializer):
+    email = serializers.CharField()
+
+
+class VerifyResetCodeRequestSerializer(serializers.Serializer):
+    email = serializers.CharField()
+    code = serializers.CharField(help_text="6-значный код из письма")
+
+
+class ResetPasswordRequestSerializer(serializers.Serializer):
+    reset_token = serializers.CharField(help_text="Токен из ответа verify-code")
+    new_password = serializers.CharField()
 
 
 class UpdateProfileRequestSerializer(serializers.Serializer):

@@ -22,7 +22,7 @@ DEBUG = False  # В продакшене всегда False! В .env можно 
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = False  # В продакшене True, в .env можно переопределить на False для локальной разработки
 
 SECURE_PROXY_SSL_HEADER = (
     'HTTP_X_FORWARDED_PROTO',
@@ -149,6 +149,19 @@ SPECTACULAR_SETTINGS = {
         "StatusEnum": "users.serializers.STATUS_CHOICES",
     },
 }
+
+# --- Email (Gmail SMTP — коды сброса пароля) --------------------------------
+# EMAIL_HOST_PASSWORD — это App Password (16 символов), не обычный пароль:
+# myaccount.google.com → Security → 2-Step Verification → App passwords
+
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "smtp.gmail.com"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+EMAIL_TIMEOUT = 10  # секунд, чтобы запрос не висел при недоступности SMTP
 
 # --- Google Drive (аватары) -----------------------------------------------
 

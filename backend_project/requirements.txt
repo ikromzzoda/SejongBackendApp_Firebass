@@ -2,6 +2,7 @@
 Django==6.0.6
 djangorestframework==3.17.1
 django-cors-headers==4.9.0
+drf-spectacular==0.29.0
 
 # Production WSGI server & static files
 gunicorn==23.0.0
