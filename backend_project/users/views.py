@@ -10,6 +10,7 @@ from django.http import HttpResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiTypes
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -19,7 +20,40 @@ from groups.models import Group
 from utils.jwt_utils import generate_token, generate_refresh_token, decode_token
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_avatar, delete_avatar
+from utils.schema import (
+    AUTH_HEADER_PARAM,
+    ADMIN_RESPONSES,
+    UNAUTHORIZED_RESPONSES,
+    ErrorResponseSerializer,
+    MessageResponseSerializer,
+)
 from audit_logs.utils import log_action
+from .serializers import (
+    UserSerializer,
+    UserDetailSerializer,
+    ProfileSerializer,
+    RegisterRequestSerializer,
+    RegisterResponseSerializer,
+    LoginRequestSerializer,
+    LoginResponseSerializer,
+    TokenRefreshRequestSerializer,
+    TokenRefreshResponseSerializer,
+    AdminListUsersResponseSerializer,
+    AdminGetUserResponseSerializer,
+    AdminEditUserRequestSerializer,
+    AdminEditUserResponseSerializer,
+    AdminVerifyUserRequestSerializer,
+    AdminVerifyUserResponseSerializer,
+    AdminSetStatusRequestSerializer,
+    AdminSetStatusResponseSerializer,
+    AdminCreateUserRequestSerializer,
+    AdminCreateUserResponseSerializer,
+    UpdateProfileRequestSerializer,
+    UpdateProfileResponseSerializer,
+    ChangeAvatarRequestSerializer,
+    ChangeAvatarResponseSerializer,
+    BulkImportRequestSerializer,
+)
 
 
 PHONE_RE = re.compile(r'^\+992\d{9}$')
@@ -61,6 +95,16 @@ def _username_taken(username: str) -> bool:
 # Auth
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Users'],
+    summary='Регистрация',
+    description='Регистрация нового пользователя. Статус по умолчанию — "Guest", ожидает подтверждения администратора.',
+    request={'multipart/form-data': RegisterRequestSerializer},
+    responses={
+        201: RegisterResponseSerializer,
+        400: ErrorResponseSerializer,
+    },
+)
 @api_view(['POST'])
 def register(request):
     data = request.data
@@ -131,15 +175,28 @@ def register(request):
     }, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Вход',
+    description='Вход по username и паролю. Возвращает access и refresh токены.',
+    request=LoginRequestSerializer,
+    responses={
+        200: LoginResponseSerializer,
+        400: ErrorResponseSerializer,
+        401: ErrorResponseSerializer,
+    },
+)
 @api_view(['POST'])
 def login(request):
     data     = request.data
     username = data.get('username', '').strip()
     password = data.get('password', '')
 
-    if not username or not password:
+    device_token = data.get('device_token', '').strip()
+
+    if not username or not password or not device_token:
         return Response(
-            {'error': 'Введите username и пароль'},
+            {'error': 'Введите username, пароль и device_token'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -152,8 +209,7 @@ def login(request):
 
     user = users[0]
 
-    device_token = data.get('device_token', '').strip()
-    if device_token and device_token != (user.device_token or ''):
+    if device_token != (user.device_token or ''):
         user.device_token = device_token
 
     access_token = generate_token(
@@ -175,6 +231,17 @@ def login(request):
     })
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Выход',
+    description='Отзывает текущий access-токен (добавляет его jti в чёрный список) и очищает refresh-токен пользователя.',
+    parameters=[AUTH_HEADER_PARAM],
+    request=None,
+    responses={
+        200: MessageResponseSerializer,
+        401: ErrorResponseSerializer,
+    },
+)
 @api_view(['POST'])
 def logout(request):
     auth_header = request.headers.get('Authorization', '')
@@ -204,6 +271,17 @@ def logout(request):
     return Response({'message': 'Выход выполнен'})
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Обновить токен',
+    description='Обновляет access-токен по действительному refresh-токену (одноразовый — старый refresh-токен становится недействителен).',
+    request=TokenRefreshRequestSerializer,
+    responses={
+        200: TokenRefreshResponseSerializer,
+        400: ErrorResponseSerializer,
+        401: ErrorResponseSerializer,
+    },
+)
 @api_view(['POST'])
 def token_refresh(request):
     incoming = request.data.get('refresh_token', '')
@@ -247,6 +325,17 @@ def token_refresh(request):
 # Profile — get my data
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Users'],
+    summary='Мои данные',
+    description='Возвращает данные профиля текущего авторизованного пользователя.',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={
+        200: ProfileSerializer,
+        404: ErrorResponseSerializer,
+        **UNAUTHORIZED_RESPONSES,
+    },
+)
 @api_view(['GET'])
 @jwt_required
 def get_profile(request):
@@ -313,6 +402,22 @@ def _user_dict(user, groups_cache: dict | None = None, full: bool = False):
 # Admin — users
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Users'],
+    operation_id='users_admin_list_users',
+    summary='Список пользователей (admin)',
+    description='Список всех пользователей с опциональной фильтрацией по статусу, статусу верификации или группе.',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('status', OpenApiTypes.STR, description='Фильтр по статусу (Student/Teacher/Admin/Guest)'),
+        OpenApiParameter('verification_status', OpenApiTypes.STR, description='Фильтр по статусу верификации (Pending/Approved/Rejected)'),
+        OpenApiParameter('group_id', OpenApiTypes.STR, description='Фильтр по ID группы'),
+    ],
+    responses={
+        200: AdminListUsersResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['GET'])
 @admin_required
 def admin_list_users(request):
@@ -340,6 +445,17 @@ def admin_list_users(request):
     })
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Получить пользователя (admin)',
+    description='Получить полную информацию об одном пользователе по ID.',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={
+        200: AdminGetUserResponseSerializer,
+        404: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['GET'])
 @admin_required
 def admin_get_user(request, user_id):
@@ -353,6 +469,19 @@ def admin_get_user(request, user_id):
     return Response({'user': _user_dict(user, full=True)})
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Редактировать пользователя (admin)',
+    description='Частичное обновление данных пользователя. Передавайте только изменяемые поля.',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminEditUserRequestSerializer,
+    responses={
+        200: AdminEditUserResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_user(request, user_id):
@@ -447,6 +576,19 @@ def admin_edit_user(request, user_id):
     })
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Подтвердить/отклонить верификацию (admin)',
+    description='При подтверждении статус пользователя меняется на "Student".',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminVerifyUserRequestSerializer,
+    responses={
+        200: AdminVerifyUserResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @admin_required
 def admin_verify_user(request, user_id):
@@ -484,6 +626,18 @@ def admin_verify_user(request, user_id):
     })
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Назначить статус (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminSetStatusRequestSerializer,
+    responses={
+        200: AdminSetStatusResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @admin_required
 def admin_set_status(request, user_id):
@@ -513,6 +667,19 @@ def admin_set_status(request, user_id):
     })
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Создать пользователя (admin)',
+    description='Создать нового пользователя вручную. Верификация выставляется сразу как "Approved".',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminCreateUserRequestSerializer,
+    responses={
+        201: AdminCreateUserResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @admin_required
 def admin_create_user(request):
@@ -582,6 +749,19 @@ def admin_create_user(request):
 # Profile
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Users'],
+    summary='Обновить профиль',
+    description='Частичное обновление своего профиля. Для смены пароля обязательно передать текущий пароль в поле "check_password".',
+    parameters=[AUTH_HEADER_PARAM],
+    request=UpdateProfileRequestSerializer,
+    responses={
+        200: UpdateProfileResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        **UNAUTHORIZED_RESPONSES,
+    },
+)
 @api_view(['PATCH'])
 @jwt_required
 def update_profile(request):
@@ -652,6 +832,19 @@ def update_profile(request):
     })
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Сменить аватар',
+    parameters=[AUTH_HEADER_PARAM],
+    request={'multipart/form-data': ChangeAvatarRequestSerializer},
+    responses={
+        200: ChangeAvatarResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        502: ErrorResponseSerializer,
+        **UNAUTHORIZED_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @jwt_required
 def change_avatar(request):
@@ -779,6 +972,21 @@ def _auto_width(ws):
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 40)
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Массовая загрузка студентов (admin)',
+    description='Загружает студентов из Excel-файла (.xlsx) и возвращает файл .xlsx с результатами импорта (логины/пароли/ошибки).',
+    parameters=[AUTH_HEADER_PARAM],
+    request={'multipart/form-data': BulkImportRequestSerializer},
+    responses={
+        200: OpenApiResponse(
+            response=OpenApiTypes.BINARY,
+            description='Файл .xlsx с результатами импорта (students_credentials.xlsx).',
+        ),
+        400: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @admin_required
 def admin_bulk_import(request):
@@ -898,6 +1106,19 @@ def admin_bulk_import(request):
     return response
 
 
+@extend_schema(
+    tags=['Users'],
+    summary='Шаблон Excel для импорта (admin)',
+    description='Скачать шаблон .xlsx для массовой загрузки студентов.',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={
+        200: OpenApiResponse(
+            response=OpenApiTypes.BINARY,
+            description='Файл .xlsx-шаблона (students_import_template.xlsx).',
+        ),
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['GET'])
 @admin_required
 def admin_bulk_import_template(request):

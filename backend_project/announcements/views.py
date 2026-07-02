@@ -2,13 +2,23 @@ from django.core.cache import cache
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_announcement_image, delete_file
 from utils.fcm import send_notification_to_statuses
+from utils.schema import AUTH_HEADER_PARAM, ADMIN_RESPONSES, UNAUTHORIZED_RESPONSES, ErrorResponseSerializer, MessageResponseSerializer
 from audit_logs.utils import log_action
 from info.models import Notification
 from .models import Announcement
+from .serializers import (
+    AdminCreateAnnouncementRequestSerializer,
+    AdminCreateAnnouncementResponseSerializer,
+    AdminEditAnnouncementRequestSerializer,
+    AdminEditAnnouncementResponseSerializer,
+    ListAnnouncementsResponseSerializer,
+    GetAnnouncementResponseSerializer,
+)
 
 _ALL_STATUSES = ['Guest', 'Student', 'Teacher', 'Admin']
 
@@ -98,6 +108,19 @@ def _invalidate_cache() -> None:
 # Admin endpoints
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Announcements'],
+    summary='Создать объявление (admin)',
+    description='Создаёт объявление, дублирует его как уведомление и отправляет push-уведомление всем пользователям.',
+    parameters=[AUTH_HEADER_PARAM],
+    request={'multipart/form-data': AdminCreateAnnouncementRequestSerializer},
+    responses={
+        201: AdminCreateAnnouncementResponseSerializer,
+        400: ErrorResponseSerializer,
+        502: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @admin_required
 def admin_create_announcement(request):
@@ -154,6 +177,20 @@ def admin_create_announcement(request):
     )
 
 
+@extend_schema(
+    tags=['Announcements'],
+    summary='Редактировать объявление (admin)',
+    description='Передача "images" заменяет все текущие изображения (старые удаляются после успешной загрузки новых).',
+    parameters=[AUTH_HEADER_PARAM],
+    request={'multipart/form-data': AdminEditAnnouncementRequestSerializer},
+    responses={
+        200: AdminEditAnnouncementResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        502: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_announcement(request, ann_id):
@@ -197,6 +234,12 @@ def admin_edit_announcement(request, ann_id):
     return Response({'message': 'Объявление обновлено', 'updated_fields': updated_fields, 'announcement': _ann_dict(ann)})
 
 
+@extend_schema(
+    tags=['Announcements'],
+    summary='Удалить объявление (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: MessageResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_announcement(request, ann_id):
@@ -217,6 +260,17 @@ def admin_delete_announcement(request, ann_id):
 # Public (authenticated) endpoints
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Announcements'],
+    operation_id='announcements_list',
+    summary='Список объявлений',
+    description='Список объявлений с пагинацией. Результат кэшируется на 60 секунд.',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('limit', OpenApiTypes.INT, description='Максимум записей (по умолчанию 20, максимум 100)'),
+    ],
+    responses={200: ListAnnouncementsResponseSerializer, **UNAUTHORIZED_RESPONSES},
+)
 @api_view(['GET'])
 @jwt_required
 def list_announcements(request):
@@ -240,6 +294,12 @@ def list_announcements(request):
     return Response(result)
 
 
+@extend_schema(
+    tags=['Announcements'],
+    summary='Получить объявление',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: GetAnnouncementResponseSerializer, 404: ErrorResponseSerializer, **UNAUTHORIZED_RESPONSES},
+)
 @api_view(['GET'])
 @jwt_required
 def get_announcement(request, ann_id):

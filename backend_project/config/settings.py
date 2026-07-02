@@ -22,7 +22,7 @@ DEBUG = False  # В продакшене всегда False! В .env можно 
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 
-SECURE_SSL_REDIRECT = False
+SECURE_SSL_REDIRECT = True
 
 SECURE_PROXY_SSL_HEADER = (
     'HTTP_X_FORWARDED_PROTO',
@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "drf_spectacular",
     "corsheaders",
     "users",
     "groups",
@@ -127,6 +128,26 @@ REST_FRAMEWORK = {
         "rest_framework.parsers.FormParser",
         "rest_framework.parsers.MultiPartParser",
     ],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# --- drf-spectacular (OpenAPI / Swagger docs) ------------------------------
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Sejong Backend API",
+    "DESCRIPTION": (
+        "REST API мобильного приложения Sejong (пользователи, группы, "
+        "электронные книги, расписание, уведомления, объявления, аудит-логи). "
+        "Данные хранятся в Firebase Firestore, авторизация — через собственные JWT "
+        "(заголовок `Authorization: Bearer <token>`)."
+    ),
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SORT_OPERATIONS": False,
+    "ENUM_NAME_OVERRIDES": {
+        "StatusEnum": "users.serializers.STATUS_CHOICES",
+    },
 }
 
 # --- Google Drive (аватары) -----------------------------------------------

@@ -155,7 +155,7 @@ Authorization: Bearer <token>
 
 ### POST `/login/`
 
-Вход в систему. Если передать `device_token` — сохраняется в Firestore для FCM push-уведомлений.
+Вход в систему. `device_token` сохраняется в Firestore для FCM push-уведомлений.
 
 **Body (JSON):**
 
@@ -163,7 +163,7 @@ Authorization: Bearer <token>
 |------|-----|:---:|----------|
 | `username` | string | ✅ | Логин |
 | `password` | string | ✅ | Пароль |
-| `device_token` | string | ❌ | FCM токен устройства |
+| `device_token` | string | ✅ | FCM токен устройства |
 
 ```json
 // Запрос

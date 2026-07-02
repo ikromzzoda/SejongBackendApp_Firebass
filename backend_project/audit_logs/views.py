@@ -2,9 +2,12 @@ import json
 from datetime import datetime
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 
 from utils.decorators import admin_required
+from utils.schema import AUTH_HEADER_PARAM, ADMIN_RESPONSES
 from .models import AuditLog
+from .serializers import ListAuditLogsResponseSerializer
 
 
 def _log_dict(log) -> dict:
@@ -23,6 +26,20 @@ def _log_dict(log) -> dict:
     }
 
 
+@extend_schema(
+    tags=['Audit Logs'],
+    summary='Список аудит-логов (admin)',
+    description='История административных действий (create/update/delete). Применяется только один фильтр за раз, в порядке приоритета: action > model_name > admin_user.',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('limit', OpenApiTypes.INT, description='Кол-во записей (по умолчанию 50, от 1 до 200)'),
+        OpenApiParameter('offset', OpenApiTypes.INT, description='Смещение (по умолчанию 0)'),
+        OpenApiParameter('action', OpenApiTypes.STR, description='Фильтр по действию (create/update/delete)'),
+        OpenApiParameter('model_name', OpenApiTypes.STR, description='Фильтр по имени модели (например, User, Book)'),
+        OpenApiParameter('admin_user', OpenApiTypes.STR, description='Фильтр по имени администратора'),
+    ],
+    responses={200: ListAuditLogsResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['GET'])
 @admin_required
 def list_audit_logs(request):

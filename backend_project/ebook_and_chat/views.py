@@ -2,12 +2,22 @@ from django.core.cache import cache
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_book_cover, upload_book_file, delete_file
+from utils.schema import AUTH_HEADER_PARAM, ADMIN_RESPONSES, UNAUTHORIZED_RESPONSES, ErrorResponseSerializer, MessageResponseSerializer
 from audit_logs.utils import log_action
 from .models import Book, VALID_GENRES
-from .serializers import BookSerializer
+from .serializers import (
+    BookSerializer,
+    BookCreateRequestSerializer,
+    BookCreateResponseSerializer,
+    BookEditRequestSerializer,
+    BookEditResponseSerializer,
+    ListBooksResponseSerializer,
+    GetBookResponseSerializer,
+)
 
 
 ALLOWED_COVER_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
@@ -53,6 +63,19 @@ def _invalidate_books_cache():
 # Admin endpoints
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Books'],
+    summary='Добавить книгу (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    request={'multipart/form-data': BookCreateRequestSerializer},
+    responses={
+        201: BookCreateResponseSerializer,
+        400: ErrorResponseSerializer,
+        500: ErrorResponseSerializer,
+        502: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @admin_required
 def admin_create_book(request):
@@ -116,6 +139,21 @@ def admin_create_book(request):
     return Response({'message': 'Книга успешно добавлена', 'book': BookSerializer(book).data}, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(
+    tags=['Books'],
+    summary='Редактировать книгу (admin)',
+    description='Частичное обновление книги. Передача "file"/"cover" заменяет соответствующий файл (старый удаляется после успешного сохранения).',
+    parameters=[AUTH_HEADER_PARAM],
+    request={'multipart/form-data': BookEditRequestSerializer},
+    responses={
+        200: BookEditResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        500: ErrorResponseSerializer,
+        502: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_book(request, book_id):
@@ -201,6 +239,12 @@ def admin_edit_book(request, book_id):
     return Response({'message': 'Книга обновлена', 'updated_fields': updated_fields, 'book': BookSerializer(book).data})
 
 
+@extend_schema(
+    tags=['Books'],
+    summary='Удалить книгу (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: MessageResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_book(request, book_id):
@@ -223,6 +267,19 @@ def admin_delete_book(request, book_id):
 # Public (authenticated) endpoints
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Books'],
+    operation_id='books_list',
+    summary='Список книг',
+    description='Список книг с пагинацией и опциональным фильтром по жанру. Результат кэшируется на 5 минут.',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('genres', OpenApiTypes.STR, description='Фильтр по жанру'),
+        OpenApiParameter('limit', OpenApiTypes.INT, description='Кол-во книг (по умолчанию 100, максимум 500)'),
+        OpenApiParameter('offset', OpenApiTypes.INT, description='Смещение (по умолчанию 0)'),
+    ],
+    responses={200: ListBooksResponseSerializer, 400: ErrorResponseSerializer, **UNAUTHORIZED_RESPONSES},
+)
 @api_view(['GET'])
 @jwt_required
 def list_books(request):
@@ -265,6 +322,12 @@ def list_books(request):
     })
 
 
+@extend_schema(
+    tags=['Books'],
+    summary='Получить книгу',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: GetBookResponseSerializer, 404: ErrorResponseSerializer, **UNAUTHORIZED_RESPONSES},
+)
 @api_view(['GET'])
 @jwt_required
 def get_book(request, book_id):

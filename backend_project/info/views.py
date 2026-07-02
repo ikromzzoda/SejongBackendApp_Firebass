@@ -3,14 +3,37 @@ from datetime import datetime
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 
 from utils.decorators import admin_required, jwt_required
 from utils.drive import upload_notification_image, delete_file
 from utils.fcm import send_notification_to_statuses
+from utils.schema import AUTH_HEADER_PARAM, ADMIN_RESPONSES, UNAUTHORIZED_RESPONSES, ErrorResponseSerializer, MessageResponseSerializer
 from audit_logs.utils import log_action
 from users.models import User
 from groups.models import Group
 from .models import Schedule, Notification, PrivacySection
+from .serializers import (
+    ScheduleSerializer,
+    AdminCreateScheduleRequestSerializer,
+    AdminCreateScheduleResponseSerializer,
+    AdminEditScheduleRequestSerializer,
+    AdminEditScheduleResponseSerializer,
+    AdminGetScheduleResponseSerializer,
+    AdminListSchedulesResponseSerializer,
+    GroupScheduleResponseSerializer,
+    AdminCreateNotificationRequestSerializer,
+    AdminCreateNotificationResponseSerializer,
+    AdminEditNotificationRequestSerializer,
+    AdminEditNotificationResponseSerializer,
+    AdminGetNotificationResponseSerializer,
+    ListNotificationsResponseSerializer,
+    AdminCreatePrivacySectionRequestSerializer,
+    AdminCreatePrivacySectionResponseSerializer,
+    AdminEditPrivacySectionRequestSerializer,
+    AdminEditPrivacySectionResponseSerializer,
+    ListPrivacySectionsResponseSerializer,
+)
 
 
 VALID_DAYS         = {0, 1, 2, 3, 4, 5, 6}
@@ -167,6 +190,19 @@ def _pagination_params(request, default_limit=100):
 # Admin endpoints
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Schedules'],
+    summary='Создать расписание (admin)',
+    description='Не более одного занятия на день для группы, максимум 6 учебных дней на группу.',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminCreateScheduleRequestSerializer,
+    responses={
+        201: AdminCreateScheduleResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @admin_required
 def admin_create_schedule(request):
@@ -239,6 +275,20 @@ def admin_create_schedule(request):
     )
 
 
+@extend_schema(
+    tags=['Schedules'],
+    operation_id='info_admin_list_schedules',
+    summary='Список расписаний (admin)',
+    description='Фильтр по group_name или teacher_name (взаимоисключающие, приоритет у group_name).',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('group_name', OpenApiTypes.STR, description='Фильтр по имени группы'),
+        OpenApiParameter('teacher_name', OpenApiTypes.STR, description='Фильтр по ФИО учителя'),
+        OpenApiParameter('limit', OpenApiTypes.INT, description='Кол-во записей (по умолчанию 100, максимум 500)'),
+        OpenApiParameter('offset', OpenApiTypes.INT, description='Смещение (по умолчанию 0)'),
+    ],
+    responses={200: AdminListSchedulesResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['GET'])
 @admin_required
 def admin_list_schedules(request):
@@ -278,6 +328,12 @@ def admin_list_schedules(request):
     return Response({'total': total, 'schedules': result[offset:offset + limit]})
 
 
+@extend_schema(
+    tags=['Schedules'],
+    summary='Получить расписание (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: AdminGetScheduleResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['GET'])
 @admin_required
 def admin_get_schedule(request, schedule_id):
@@ -288,6 +344,18 @@ def admin_get_schedule(request, schedule_id):
     return Response({'schedule': _schedule_dict(sched, group_name, teacher_name)})
 
 
+@extend_schema(
+    tags=['Schedules'],
+    summary='Редактировать расписание (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminEditScheduleRequestSerializer,
+    responses={
+        200: AdminEditScheduleResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_schedule(request, schedule_id):
@@ -369,6 +437,12 @@ def admin_edit_schedule(request, schedule_id):
     })
 
 
+@extend_schema(
+    tags=['Schedules'],
+    summary='Удалить расписание (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: MessageResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_schedule(request, schedule_id):
@@ -384,6 +458,16 @@ def admin_delete_schedule(request, schedule_id):
 # Public / authenticated endpoints
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Schedules'],
+    summary='Все расписания',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('limit', OpenApiTypes.INT, description='Кол-во записей (по умолчанию 100, максимум 500)'),
+        OpenApiParameter('offset', OpenApiTypes.INT, description='Смещение (по умолчанию 0)'),
+    ],
+    responses={200: AdminListSchedulesResponseSerializer, **UNAUTHORIZED_RESPONSES},
+)
 @api_view(['GET'])
 @jwt_required
 def get_all_schedules(request):
@@ -402,6 +486,12 @@ def get_all_schedules(request):
     })
 
 
+@extend_schema(
+    tags=['Schedules'],
+    summary='Расписание группы',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: GroupScheduleResponseSerializer, 404: ErrorResponseSerializer, **UNAUTHORIZED_RESPONSES},
+)
 @api_view(['GET'])
 @jwt_required
 def get_group_schedule(request, group_name):
@@ -489,6 +579,19 @@ def _upload_notif_images(files) -> tuple[list, 'Response | None']:
 # Notifications — Admin endpoints
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Notifications'],
+    summary='Создать уведомление (admin)',
+    description='Создаёт уведомление и сразу отправляет push-уведомление через FCM выбранным группам пользователей (target_statuses).',
+    parameters=[AUTH_HEADER_PARAM],
+    request={'multipart/form-data': AdminCreateNotificationRequestSerializer},
+    responses={
+        201: AdminCreateNotificationResponseSerializer,
+        400: ErrorResponseSerializer,
+        502: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @admin_required
 def admin_create_notification(request):
@@ -545,6 +648,18 @@ def admin_create_notification(request):
     )
 
 
+@extend_schema(
+    tags=['Notifications'],
+    operation_id='info_admin_list_notifications',
+    summary='Список уведомлений (admin)',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('status', OpenApiTypes.STR, description='Фильтр по целевому статусу (Guest/Student/Teacher/Admin)'),
+        OpenApiParameter('limit', OpenApiTypes.INT, description='Кол-во записей (по умолчанию 100, максимум 500)'),
+        OpenApiParameter('offset', OpenApiTypes.INT, description='Смещение (по умолчанию 0)'),
+    ],
+    responses={200: ListNotificationsResponseSerializer, 400: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['GET'])
 @admin_required
 def admin_list_notifications(request):
@@ -569,6 +684,12 @@ def admin_list_notifications(request):
     return Response({'total': total, 'notifications': [_notif_dict(n) for n in page]})
 
 
+@extend_schema(
+    tags=['Notifications'],
+    summary='Получить уведомление (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: AdminGetNotificationResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['GET'])
 @admin_required
 def admin_get_notification(request, notif_id):
@@ -578,6 +699,20 @@ def admin_get_notification(request, notif_id):
     return Response({'notification': _notif_dict(notif)})
 
 
+@extend_schema(
+    tags=['Notifications'],
+    summary='Редактировать уведомление (admin)',
+    description='Передача "images" заменяет все текущие изображения (старые удаляются после успешной загрузки новых).',
+    parameters=[AUTH_HEADER_PARAM],
+    request={'multipart/form-data': AdminEditNotificationRequestSerializer},
+    responses={
+        200: AdminEditNotificationResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        502: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_notification(request, notif_id):
@@ -636,6 +771,12 @@ def admin_edit_notification(request, notif_id):
     })
 
 
+@extend_schema(
+    tags=['Notifications'],
+    summary='Удалить уведомление (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: MessageResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_notification(request, notif_id):
@@ -654,6 +795,17 @@ def admin_delete_notification(request, notif_id):
 # Notifications — Authenticated user endpoint
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Notifications'],
+    summary='Мои уведомления',
+    description='Возвращает уведомления, нацеленные на статус текущего пользователя.',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('limit', OpenApiTypes.INT, description='Кол-во записей (по умолчанию 100, максимум 500)'),
+        OpenApiParameter('offset', OpenApiTypes.INT, description='Смещение (по умолчанию 0)'),
+    ],
+    responses={200: ListNotificationsResponseSerializer, 400: ErrorResponseSerializer, **UNAUTHORIZED_RESPONSES},
+)
 @api_view(['GET'])
 @jwt_required
 def get_my_notifications(request):
@@ -714,6 +866,17 @@ def _sorted_sections():
 # Privacy Policy — Admin endpoints
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Privacy Policy'],
+    summary='Создать раздел политики конфиденциальности (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminCreatePrivacySectionRequestSerializer,
+    responses={
+        201: AdminCreatePrivacySectionResponseSerializer,
+        400: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['POST'])
 @admin_required
 def admin_create_privacy_section(request):
@@ -752,6 +915,18 @@ def admin_create_privacy_section(request):
     )
 
 
+@extend_schema(
+    tags=['Privacy Policy'],
+    summary='Редактировать раздел (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminEditPrivacySectionRequestSerializer,
+    responses={
+        200: AdminEditPrivacySectionResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
 @api_view(['PATCH'])
 @admin_required
 def admin_edit_privacy_section(request, section_id):
@@ -786,6 +961,12 @@ def admin_edit_privacy_section(request, section_id):
     })
 
 
+@extend_schema(
+    tags=['Privacy Policy'],
+    summary='Удалить раздел (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: MessageResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_privacy_section(request, section_id):
@@ -798,6 +979,12 @@ def admin_delete_privacy_section(request, section_id):
     return Response({'message': 'Раздел удалён'})
 
 
+@extend_schema(
+    tags=['Privacy Policy'],
+    summary='Список разделов (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: ListPrivacySectionsResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['GET'])
 @admin_required
 def admin_list_privacy_sections(request):
@@ -809,6 +996,12 @@ def admin_list_privacy_sections(request):
 # Privacy Policy — Public (authenticated) endpoint
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Privacy Policy'],
+    summary='Политика конфиденциальности',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: ListPrivacySectionsResponseSerializer, **UNAUTHORIZED_RESPONSES},
+)
 @api_view(['GET'])
 @jwt_required
 def get_privacy_policy(request):

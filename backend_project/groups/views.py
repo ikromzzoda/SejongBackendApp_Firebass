@@ -1,11 +1,23 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 
 from .models import Group
 from users.models import User
 from utils.decorators import admin_required
+from utils.schema import AUTH_HEADER_PARAM, ADMIN_RESPONSES, ErrorResponseSerializer, MessageResponseSerializer
 from audit_logs.utils import log_action
+from .serializers import (
+    GroupSerializer,
+    AdminListGroupsResponseSerializer,
+    AdminCreateGroupRequestSerializer,
+    AdminCreateGroupResponseSerializer,
+    AdminRenameGroupRequestSerializer,
+    AdminListGroupMembersResponseSerializer,
+    AdminAssignGroupRequestSerializer,
+    AdminGroupMemberActionResponseSerializer,
+)
 
 
 def _user_dict(user, group_name: str = ''):
@@ -41,6 +53,15 @@ def _get_user_or_404(user_id):
     return user, None
 
 
+@extend_schema(
+    tags=['Groups'],
+    summary='Список групп (admin)',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('limit', OpenApiTypes.INT, description='Максимум записей (по умолчанию 20, максимум 100)'),
+    ],
+    responses={200: AdminListGroupsResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['GET'])
 @admin_required
 def admin_list_groups(request):
@@ -55,6 +76,13 @@ def admin_list_groups(request):
     return Response({'total': len(groups), 'has_more': has_more, 'groups': groups})
 
 
+@extend_schema(
+    tags=['Groups'],
+    summary='Создать группу (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminCreateGroupRequestSerializer,
+    responses={201: AdminCreateGroupResponseSerializer, 400: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['POST'])
 @admin_required
 def admin_create_group(request):
@@ -76,6 +104,13 @@ def admin_create_group(request):
     )
 
 
+@extend_schema(
+    tags=['Groups'],
+    summary='Удалить группу (admin)',
+    description='Удаляет группу и снимает её со всех участников (их поле group становится пустым).',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: MessageResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['DELETE'])
 @admin_required
 def admin_delete_group(request, group_id):
@@ -93,6 +128,13 @@ def admin_delete_group(request, group_id):
     return Response({'message': f'Группа "{group.name}" удалена.'})
 
 
+@extend_schema(
+    tags=['Groups'],
+    summary='Переименовать группу (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminRenameGroupRequestSerializer,
+    responses={200: AdminCreateGroupResponseSerializer, 400: ErrorResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['PATCH'])
 @admin_required
 def admin_rename_group(request, group_id):
@@ -114,6 +156,12 @@ def admin_rename_group(request, group_id):
     return Response({'message': 'Группа переименована.', 'group': {'id': group.id, 'name': group.name}})
 
 
+@extend_schema(
+    tags=['Groups'],
+    summary='Участники группы (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: AdminListGroupMembersResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['GET'])
 @admin_required
 def admin_list_group_members(request, group_id):
@@ -129,6 +177,13 @@ def admin_list_group_members(request, group_id):
     })
 
 
+@extend_schema(
+    tags=['Groups'],
+    summary='Добавить пользователя в группу (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    request=AdminAssignGroupRequestSerializer,
+    responses={200: AdminGroupMemberActionResponseSerializer, 400: ErrorResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['POST'])
 @admin_required
 def admin_assign_group(request, user_id):
@@ -153,6 +208,12 @@ def admin_assign_group(request, user_id):
     })
 
 
+@extend_schema(
+    tags=['Groups'],
+    summary='Удалить пользователя из группы (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: AdminGroupMemberActionResponseSerializer, 400: ErrorResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
 @api_view(['DELETE'])
 @admin_required
 def admin_remove_from_group(request, user_id):
