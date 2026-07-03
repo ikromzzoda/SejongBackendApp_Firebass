@@ -43,7 +43,7 @@ class ProfileSerializer(serializers.Serializer):
 
 class RegisterResponseSerializer(serializers.Serializer):
     message = serializers.CharField()
-    token = serializers.CharField()
+    email = serializers.CharField()
     status = serializers.ChoiceField(choices=STATUS_CHOICES)
     verification_status = serializers.ChoiceField(choices=VERIFICATION_CHOICES)
     avatar = serializers.CharField()
@@ -131,6 +131,15 @@ class LoginRequestSerializer(serializers.Serializer):
 
 class TokenRefreshRequestSerializer(serializers.Serializer):
     refresh_token = serializers.CharField()
+
+
+class VerifyEmailRequestSerializer(serializers.Serializer):
+    email = serializers.CharField()
+    code = serializers.CharField(help_text="6-значный код из письма")
+
+
+class ResendEmailCodeRequestSerializer(serializers.Serializer):
+    email = serializers.CharField()
 
 
 class ForgotPasswordRequestSerializer(serializers.Serializer):

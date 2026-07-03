@@ -62,6 +62,8 @@ from .serializers import (
     ChangeAvatarRequestSerializer,
     ChangeAvatarResponseSerializer,
     BulkImportRequestSerializer,
+    VerifyEmailRequestSerializer,
+    ResendEmailCodeRequestSerializer,
     ForgotPasswordRequestSerializer,
     VerifyResetCodeRequestSerializer,
     VerifyResetCodeResponseSerializer,
@@ -75,6 +77,47 @@ ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
 MAX_AVATAR_SIZE = 3 * 1024 * 1024  # 3 MB
 
 VALID_STATUSES = {'Student', 'Teacher', 'Admin', 'Guest'}
+
+# Подтверждение email при регистрации — та же политика, что и у сброса пароля
+EMAIL_CODE_LIFETIME_MINUTES = 15
+EMAIL_CODE_MAX_ATTEMPTS     = 5
+EMAIL_CODE_RESEND_SECONDS   = 600  # повторная отправка кода — не чаще раза в 10 минут
+
+# Единый ответ resend-code: не раскрываем, зарегистрирован ли email
+RESEND_CODE_MESSAGE = 'Если такой email зарегистрирован и не подтверждён, код отправлен на почту.'
+
+
+def _clear_email_code(user):
+    user.email_code_hash     = ''
+    user.email_code_expires  = None
+    user.email_code_attempts = 0
+
+
+def _send_email_verification_code(user, now):
+    """Генерирует 6-значный код, сохраняет его хэш на пользователе и шлёт код на почту.
+    Поля пользователя только выставляются — save/update вызывает вызывающий код.
+    """
+    code = f'{secrets.randbelow(1_000_000):06d}'
+    user.email_code_hash     = make_password(code)
+    user.email_code_expires  = now + timedelta(minutes=EMAIL_CODE_LIFETIME_MINUTES)
+    user.email_code_attempts = 0
+    user.email_code_sent_at  = now
+
+    try:
+        send_mail(
+            subject='Sejong: код подтверждения email',
+            message=(
+                f'Ваш код подтверждения email: {code}\n\n'
+                f'Код действует {EMAIL_CODE_LIFETIME_MINUTES} минут.\n'
+                'Если вы не регистрировались в Sejong, просто проигнорируйте это письмо.'
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception:
+        # Не раскрываем наружу проблемы SMTP; код остаётся валидным до истечения
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +154,12 @@ def _username_taken(username: str) -> bool:
 @extend_schema(
     tags=['Users'],
     summary='Регистрация',
-    description='Регистрация нового пользователя. Статус по умолчанию — "Guest", ожидает подтверждения администратора.',
+    description=(
+        'Регистрация нового пользователя. На указанный email отправляется 6-значный код '
+        f'подтверждения (действует {EMAIL_CODE_LIFETIME_MINUTES} минут). До подтверждения '
+        'email вход в систему невозможен. Статус по умолчанию — "Guest", ожидает '
+        'подтверждения администратора.'
+    ),
     request={'multipart/form-data': RegisterRequestSerializer},
     responses={
         201: RegisterResponseSerializer,
@@ -158,6 +206,8 @@ def register(request):
     user.date_of_birth = data.get('date_of_birth', '')
     user.status              = 'Guest'
     user.verification_status = 'Pending'
+    user.email_verified       = False
+    _send_email_verification_code(user, datetime.now(timezone.utc))
     user.save()
 
     if avatar_file:
@@ -171,21 +221,119 @@ def register(request):
         except Exception:
             pass
 
-    token = generate_token(
-        user_id=user.id,
-        username=user.username,
-        status=user.status,
-        verification_status=user.verification_status,
-    )
-
     return Response({
-        'message': 'Регистрация успешна. Ожидайте подтверждения администратора.',
-        'token': token,
+        'message': 'Регистрация успешна. Мы отправили 6-значный код на вашу почту — подтвердите email, чтобы войти.',
+        'email': user.email,
         'status': user.status,
         'verification_status': user.verification_status,
         'avatar': user.avatar or '',
         'fcm_topic': f'status_{user.status}',
     }, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Регистрация — подтвердить email',
+    description=(
+        'Проверяет 6-значный код из письма, отправленного при регистрации. При верном коде '
+        'email считается подтверждённым и пользователь может войти. После '
+        f'{EMAIL_CODE_MAX_ATTEMPTS} неверных попыток код аннулируется — нужно запросить новый '
+        'через resend-code.'
+    ),
+    request=VerifyEmailRequestSerializer,
+    responses={
+        200: MessageResponseSerializer,
+        400: ErrorResponseSerializer,
+        429: ErrorResponseSerializer,
+    },
+)
+@api_view(['POST'])
+def verify_email(request):
+    email = (request.data.get('email') or '').strip()
+    code  = (request.data.get('code') or '').strip()
+    if not email or not code:
+        return Response({'error': 'Поля "email" и "code" обязательны'}, status=status.HTTP_400_BAD_REQUEST)
+
+    users = list(User.collection.filter('email', '==', email).fetch(1))
+    user  = users[0] if users else None
+
+    if user and user.email_verified:
+        return Response({'message': 'Email уже подтверждён. Можете войти.'})
+
+    if not user or not user.email_code_hash:
+        return Response(
+            {'error': 'Код неверен или истёк. Запросите новый код.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    now = datetime.now(timezone.utc)
+    if not user.email_code_expires or now > user.email_code_expires:
+        _clear_email_code(user)
+        user.update()
+        return Response(
+            {'error': 'Код истёк. Запросите новый код.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not check_password(code, user.email_code_hash):
+        attempts = (user.email_code_attempts or 0) + 1
+        if attempts >= EMAIL_CODE_MAX_ATTEMPTS:
+            _clear_email_code(user)
+            user.update()
+            return Response(
+                {'error': 'Слишком много неверных попыток. Запросите новый код.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        user.email_code_attempts = attempts
+        user.update()
+        return Response(
+            {'error': f'Неверный код. Осталось попыток: {EMAIL_CODE_MAX_ATTEMPTS - attempts}'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Код верный: подтверждаем email и аннулируем код
+    user.email_verified = True
+    _clear_email_code(user)
+    user.update()
+
+    return Response({'message': 'Email подтверждён. Теперь вы можете войти.'})
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Регистрация — отправить код повторно',
+    description=(
+        'Повторно отправляет 6-значный код подтверждения email. Повторная отправка — не чаще '
+        f'раза в {EMAIL_CODE_RESEND_SECONDS // 60} минут. Ответ одинаковый независимо от того, '
+        'существует ли email (защита от перебора).'
+    ),
+    request=ResendEmailCodeRequestSerializer,
+    responses={
+        200: MessageResponseSerializer,
+        400: ErrorResponseSerializer,
+    },
+)
+@api_view(['POST'])
+def resend_email_code(request):
+    email = (request.data.get('email') or '').strip()
+    if not email:
+        return Response({'error': 'Поле "email" обязательно'}, status=status.HTTP_400_BAD_REQUEST)
+
+    users = list(User.collection.filter('email', '==', email).fetch(1))
+    if not users or users[0].email_verified:
+        return Response({'message': RESEND_CODE_MESSAGE})
+
+    user = users[0]
+    now  = datetime.now(timezone.utc)
+
+    # Rate limit: не отправляем новый код, если предыдущий ушёл недавно
+    if user.email_code_sent_at and (now - user.email_code_sent_at).total_seconds() < EMAIL_CODE_RESEND_SECONDS:
+        return Response({'message': RESEND_CODE_MESSAGE})
+
+    _send_email_verification_code(user, now)
+    user.update()
+
+    return Response({'message': RESEND_CODE_MESSAGE})
 
 
 @extend_schema(
@@ -221,6 +369,14 @@ def login(request):
         )
 
     user = users[0]
+
+    # email_verified is False — только у новых пользователей, не подтвердивших код;
+    # у старых записей поле отсутствует (None) — их не блокируем
+    if user.email_verified is False:
+        return Response(
+            {'error': 'Email не подтверждён. Введите код из письма или запросите новый.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     if device_token != (user.device_token or ''):
         user.device_token = device_token
@@ -954,6 +1110,7 @@ def admin_create_user(request):
     user.group         = group_id
     user.avatar        = data.get('avatar', DEFAULT_AVATAR)
     user.verification_status = 'Approved'
+    user.email_verified       = True
     user.save()
     log_action(request, 'create', 'User', user.id, {
         'username': user.username,
@@ -1273,6 +1430,7 @@ def admin_bulk_import(request):
             user.group         = group_id
             user.avatar        = DEFAULT_AVATAR
             user.verification_status = 'Approved'
+            user.email_verified       = True
             user.save()
             results.append((fullname, email, phone_number, group_name, username, password, 'Успешно', ''))
         except Exception as e:
