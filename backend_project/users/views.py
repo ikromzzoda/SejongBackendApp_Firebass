@@ -1,22 +1,14 @@
 import re
-import uuid
-import random
 import secrets
-import string
-import io
 import jwt as pyjwt
 from datetime import datetime, timedelta, timezone
 from django.conf import settings
 from django.contrib.auth.hashers import make_password, check_password
 from django.core.mail import send_mail
-from django.http import HttpResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiTypes
-from openpyxl import load_workbook, Workbook
-from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.utils import get_column_letter
 
 from .models import User, BlacklistedToken, DEFAULT_AVATAR
 from groups.models import Group
@@ -69,82 +61,37 @@ from .serializers import (
     VerifyResetCodeResponseSerializer,
     ResetPasswordRequestSerializer,
 )
-
-
-PHONE_RE = re.compile(r'^\+992\d{9}$')
-
-ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
-MAX_AVATAR_SIZE = 3 * 1024 * 1024  # 3 MB
-
-VALID_STATUSES = {'Student', 'Teacher', 'Admin', 'Guest'}
-
-# Подтверждение email при регистрации — та же политика, что и у сброса пароля
-EMAIL_CODE_LIFETIME_MINUTES = 15
-EMAIL_CODE_MAX_ATTEMPTS     = 5
-EMAIL_CODE_RESEND_SECONDS   = 600  # повторная отправка кода — не чаще раза в 10 минут
-
-# Единый ответ resend-code: не раскрываем, зарегистрирован ли email
-RESEND_CODE_MESSAGE = 'Если такой email зарегистрирован и не подтверждён, код отправлен на почту.'
-
-
-def _clear_email_code(user):
-    user.email_code_hash     = ''
-    user.email_code_expires  = None
-    user.email_code_attempts = 0
-
-
-def _send_email_verification_code(user, now):
-    """Генерирует 6-значный код, сохраняет его хэш на пользователе и шлёт код на почту.
-    Поля пользователя только выставляются — save/update вызывает вызывающий код.
-    """
-    code = f'{secrets.randbelow(1_000_000):06d}'
-    user.email_code_hash     = make_password(code)
-    user.email_code_expires  = now + timedelta(minutes=EMAIL_CODE_LIFETIME_MINUTES)
-    user.email_code_attempts = 0
-    user.email_code_sent_at  = now
-
-    try:
-        send_mail(
-            subject='Sejong: код подтверждения email',
-            message=(
-                f'Ваш код подтверждения email: {code}\n\n'
-                f'Код действует {EMAIL_CODE_LIFETIME_MINUTES} минут.\n'
-                'Если вы не регистрировались в Sejong, просто проигнорируйте это письмо.'
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
-            fail_silently=False,
-        )
-    except Exception:
-        # Не раскрываем наружу проблемы SMTP; код остаётся валидным до истечения
-        pass
-
-
-# ---------------------------------------------------------------------------
-# Validation helpers
-# ---------------------------------------------------------------------------
-
-def _require_fields(data, *fields):
-    for field in fields:
-        if not data.get(field):
-            return Response(
-                {'error': f'Поле "{field}" обязательно'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-    return None
-
-
-def _validate_phone(phone: str):
-    if not PHONE_RE.match(phone):
-        return Response(
-            {'error': "Номер должен начинаться с '+992' и содержать 9 цифр после него."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    return None
-
-
-def _username_taken(username: str) -> bool:
-    return bool(list(User.collection.filter('username', '==', username).fetch(1)))
+from .validators import (
+    ALLOWED_IMAGE_TYPES,
+    MAX_AVATAR_SIZE,
+    VALID_STATUSES,
+    _require_fields,
+    _validate_phone,
+    _username_taken,
+)
+from .services import (
+    EMAIL_CODE_LIFETIME_MINUTES,
+    EMAIL_CODE_MAX_ATTEMPTS,
+    EMAIL_CODE_RESEND_SECONDS,
+    RESEND_CODE_MESSAGE,
+    RESET_CODE_LIFETIME_MINUTES,
+    RESET_CODE_MAX_ATTEMPTS,
+    RESET_CODE_RESEND_SECONDS,
+    FORGOT_PASSWORD_MESSAGE,
+    _clear_email_code,
+    _send_email_verification_code,
+    _clear_reset_code,
+    _generate_username,
+    _generate_password,
+)
+from .selectors import _user_dict
+from .excel import (
+    _detect_columns,
+    _open_import_workbook,
+    _build_import_results_xlsx,
+    _build_import_template_xlsx,
+    _xlsx_response,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -494,20 +441,6 @@ def token_refresh(request):
 # Password reset (забыли пароль)
 # ---------------------------------------------------------------------------
 
-RESET_CODE_LIFETIME_MINUTES = 15
-RESET_CODE_MAX_ATTEMPTS     = 5
-RESET_CODE_RESEND_SECONDS   = 600  # повторная отправка кода — не чаще раза в 10 минут
-
-# Единый ответ forgot-password: не раскрываем, зарегистрирован ли email
-FORGOT_PASSWORD_MESSAGE = 'Если такой email зарегистрирован, код отправлен на почту.'
-
-
-def _clear_reset_code(user):
-    user.reset_code_hash     = ''
-    user.reset_code_expires  = None
-    user.reset_code_attempts = 0
-
-
 @extend_schema(
     tags=['Users'],
     summary='Забыли пароль — отправить код',
@@ -737,42 +670,6 @@ def get_profile(request):
         'avatar':              user.avatar or '',
         'date_joined':         str(user.date_joined) if user.date_joined else '',
     })
-
-
-# ---------------------------------------------------------------------------
-# Admin — helpers
-# ---------------------------------------------------------------------------
-
-def _resolve_group_name(group_id: str, cache: dict | None = None) -> str:
-    if not group_id:
-        return ''
-    if cache is not None:
-        return cache.get(group_id, group_id)
-    try:
-        g = Group.collection.get(f'groups/{group_id}')
-        return g.name if g else group_id
-    except Exception:
-        return group_id
-
-
-def _user_dict(user, groups_cache: dict | None = None, full: bool = False):
-    d = {
-        'id':                  user.id,
-        'username':            user.username,
-        'fullname':            user.fullname,
-        'email':               user.email,
-        'phone_number':        user.phone_number,
-        'status':              user.status,
-        'verification_status': user.verification_status,
-        'group_id':            user.group or '',
-        'group':               _resolve_group_name(user.group or '', groups_cache),
-        'avatar':              user.avatar or '',
-        'date_joined':         str(user.date_joined) if user.date_joined else '',
-    }
-    if full:
-        d['date_of_birth'] = user.date_of_birth or ''
-        d['device_token']  = user.device_token or ''
-    return d
 
 
 # ---------------------------------------------------------------------------
@@ -1276,80 +1173,6 @@ def change_avatar(request):
 # Bulk import
 # ---------------------------------------------------------------------------
 
-_COL_ALIASES = {
-    'fullname':      ['full name', 'фио', 'ф.и.о', 'ф.и.о.', 'имя', 'полное имя', 'name', 'имя фамилия'],
-    'email':         ['email', 'почта', 'e-mail', 'эл. почта', 'электронная почта'],
-    'phone_number':  ['phone number', 'phone_number', 'телефон', 'номер', 'номер телефона', 'моб', 'моб.', 'тел'],
-    'date_of_birth': ['date of birth/생년월일', 'дата рождения', 'дата', 'birth', 'д.р.', 'день рождения'],
-    'group':         ['group', 'группа', 'учебная группа', 'класс'],
-}
-
-_TRANSLIT = {
-    'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh','з':'z',
-    'и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r',
-    'с':'s','т':'t','у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'sch',
-    'ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya',
-}
-
-
-def _transliterate(text: str) -> str:
-    return ''.join(_TRANSLIT.get(c, c) for c in text.lower())
-
-
-def _generate_username(fullname: str, batch_taken: set) -> str:
-    parts = fullname.strip().split()
-    if parts:
-        base = _transliterate(parts[0])
-        base = re.sub(r'[^a-z0-9]', '', base)[:12] or 'student'
-    else:
-        base = 'student'
-    for _ in range(20):
-        candidate = f"{base}_{random.randint(1000, 9999)}"
-        if candidate not in batch_taken and not _username_taken(candidate):
-            return candidate
-    return f"student_{uuid.uuid4().hex[:8]}"
-
-
-def _generate_password(length: int = 10) -> str:
-    chars = string.ascii_letters + string.digits
-    pwd = [
-        secrets.choice(string.ascii_uppercase),
-        secrets.choice(string.ascii_lowercase),
-        secrets.choice(string.digits),
-    ]
-    pwd += [secrets.choice(chars) for _ in range(length - 3)]
-    secrets.SystemRandom().shuffle(pwd)
-    return ''.join(pwd)
-
-
-def _detect_columns(header_row) -> dict:
-    mapping = {}
-    for idx, cell in enumerate(header_row):
-        if cell.value is None:
-            continue
-        normalized = str(cell.value).strip().lower()
-        for field, aliases in _COL_ALIASES.items():
-            if normalized in aliases and field not in mapping:
-                mapping[field] = idx
-    return mapping
-
-
-def _style_header(ws, col_count: int):
-    header_fill = PatternFill('solid', fgColor='1F4E79')
-    header_font = Font(bold=True, color='FFFFFF', size=11)
-    for col in range(1, col_count + 1):
-        cell = ws.cell(row=1, column=col)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal='center', vertical='center')
-
-
-def _auto_width(ws):
-    for col in ws.columns:
-        max_len = max((len(str(c.value or '')) for c in col), default=10)
-        ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 40)
-
-
 @extend_schema(
     tags=['Users'],
     summary='Массовая загрузка студентов (admin)',
@@ -1376,15 +1199,9 @@ def admin_bulk_import(request):
     if not excel_file.name.endswith('.xlsx'):
         return Response({'error': 'Разрешён только формат .xlsx'}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        wb_in = load_workbook(excel_file, data_only=True)
-    except Exception:
-        return Response({'error': 'Не удалось открыть файл. Убедитесь что это корректный .xlsx'}, status=status.HTTP_400_BAD_REQUEST)
-
-    ws_in = wb_in.active
-    rows  = list(ws_in.iter_rows())
-    if len(rows) < 2:
-        return Response({'error': 'Файл пустой или содержит только заголовок'}, status=status.HTTP_400_BAD_REQUEST)
+    rows, parse_error = _open_import_workbook(excel_file)
+    if parse_error:
+        return Response({'error': parse_error}, status=status.HTTP_400_BAD_REQUEST)
 
     col_map = _detect_columns(rows[0])
     if not col_map:
@@ -1436,31 +1253,6 @@ def admin_bulk_import(request):
         except Exception as e:
             results.append((fullname, email, phone_number, group_name, '', '', 'Ошибка', str(e)))
 
-    wb_out  = Workbook()
-    ws_out  = wb_out.active
-    ws_out.title = 'Результаты импорта'
-    ws_out.row_dimensions[1].height = 20
-
-    headers = ['№', 'ФИО', 'Email', 'Телефон', 'Группа', 'Username', 'Password', 'Статус', 'Примечание']
-    ws_out.append(headers)
-    _style_header(ws_out, len(headers))
-
-    green_fill = PatternFill('solid', fgColor='E2EFDA')
-    red_fill   = PatternFill('solid', fgColor='FFDDC1')
-
-    for i, (fullname, email, phone, group, username, password, status_text, note) in enumerate(results, start=1):
-        ws_out.append([i, fullname, email, phone, group, username, password, status_text, note])
-        row_fill = green_fill if status_text == 'Успешно' else red_fill
-        for col in range(1, len(headers) + 1):
-            ws_out.cell(row=i + 1, column=col).fill      = row_fill
-            ws_out.cell(row=i + 1, column=col).alignment = Alignment(vertical='center')
-
-    for row in ws_out.iter_rows(min_row=2, min_col=6, max_col=7):
-        for cell in row:
-            cell.font = Font(bold=True)
-
-    _auto_width(ws_out)
-
     success_count = sum(1 for r in results if r[6] == 'Успешно')
     error_count   = len(results) - success_count
     log_action(request, 'create', 'User', 'bulk_import', {
@@ -1469,20 +1261,7 @@ def admin_bulk_import(request):
         'errors':  error_count,
     })
 
-    ws_out.append([])
-    ws_out.append(['', f'Итого: {len(results)} строк | Успешно: {success_count} | Ошибок: {error_count}'])
-    ws_out.cell(row=ws_out.max_row, column=2).font = Font(bold=True, size=11)
-
-    output = io.BytesIO()
-    wb_out.save(output)
-    output.seek(0)
-
-    response = HttpResponse(
-        output.getvalue(),
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    )
-    response['Content-Disposition'] = 'attachment; filename="students_credentials.xlsx"'
-    return response
+    return _xlsx_response(_build_import_results_xlsx(results), 'students_credentials.xlsx')
 
 
 @extend_schema(
@@ -1502,29 +1281,4 @@ def admin_bulk_import(request):
 @admin_required
 def admin_bulk_import_template(request):
     """Скачать шаблон Excel для массовой загрузки студентов."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'Студенты'
-
-    headers = ['ФИО', 'Email', 'Телефон', 'Дата рождения', 'Группа']
-    ws.append(headers)
-    _style_header(ws, len(headers))
-
-    example_fill = PatternFill('solid', fgColor='EBF3FB')
-    ws.append(['Иванов Иван Иванович', 'ivan@example.com', '+992991234567', '2003-05-20', 'CS-101'])
-    for col in range(1, len(headers) + 1):
-        ws.cell(row=2, column=col).fill = example_fill
-        ws.cell(row=2, column=col).font = Font(italic=True, color='555555')
-
-    _auto_width(ws)
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-
-    response = HttpResponse(
-        output.getvalue(),
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    )
-    response['Content-Disposition'] = 'attachment; filename="students_import_template.xlsx"'
-    return response
+    return _xlsx_response(_build_import_template_xlsx(), 'students_import_template.xlsx')
