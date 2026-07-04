@@ -68,6 +68,8 @@ from .validators import (
     _require_fields,
     _validate_phone,
     _username_taken,
+    _email_taken,
+    _normalize_email,
 )
 from .services import (
     EMAIL_CODE_LIFETIME_MINUTES,
@@ -131,6 +133,12 @@ def register(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    if _email_taken(data['email']):
+        return Response(
+            {'error': 'Пользователь с такой почтой уже существует. Укажите другой email.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     avatar_file = request.FILES.get('avatar')
     if avatar_file:
         if avatar_file.content_type not in ALLOWED_IMAGE_TYPES:
@@ -147,7 +155,7 @@ def register(request):
     user = User()
     user.username      = data['username']
     user.fullname      = data.get('fullname', '')
-    user.email         = data['email']
+    user.email         = _normalize_email(data['email'])
     user.phone_number  = data['phone_number']
     user.password      = make_password(data['password'])
     user.date_of_birth = data.get('date_of_birth', '')
@@ -196,7 +204,7 @@ def register(request):
 )
 @api_view(['POST'])
 def verify_email(request):
-    email = (request.data.get('email') or '').strip()
+    email = _normalize_email(request.data.get('email'))
     code  = (request.data.get('code') or '').strip()
     if not email or not code:
         return Response({'error': 'Поля "email" и "code" обязательны'}, status=status.HTTP_400_BAD_REQUEST)
@@ -262,7 +270,7 @@ def verify_email(request):
 )
 @api_view(['POST'])
 def resend_email_code(request):
-    email = (request.data.get('email') or '').strip()
+    email = _normalize_email(request.data.get('email'))
     if not email:
         return Response({'error': 'Поле "email" обязательно'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -458,7 +466,7 @@ def token_refresh(request):
 )
 @api_view(['POST'])
 def forgot_password(request):
-    email = (request.data.get('email') or '').strip()
+    email = _normalize_email(request.data.get('email'))
     if not email:
         return Response({'error': 'Поле "email" обязательно'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -516,7 +524,7 @@ def forgot_password(request):
 )
 @api_view(['POST'])
 def verify_reset_code(request):
-    email = (request.data.get('email') or '').strip()
+    email = _normalize_email(request.data.get('email'))
     code  = (request.data.get('code') or '').strip()
     if not email or not code:
         return Response({'error': 'Поля "email" и "code" обязательны'}, status=status.HTTP_400_BAD_REQUEST)
@@ -775,7 +783,13 @@ def admin_edit_user(request, user_id):
         updated_fields.append('fullname')
 
     if 'email' in data:
-        user.email = data['email']
+        new_email = _normalize_email(data['email'])
+        if new_email != user.email and _email_taken(new_email):
+            return Response(
+                {'error': 'Пользователь с такой почтой уже существует. Укажите другой email.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user.email = new_email
         updated_fields.append('email')
 
     if 'phone_number' in data:
@@ -974,6 +988,12 @@ def admin_create_user(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    if _email_taken(data['email']):
+        return Response(
+            {'error': 'Пользователь с такой почтой уже существует. Укажите другой email.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     user_status = data.get('status', 'Student')
     if user_status not in VALID_STATUSES:
         return Response(
@@ -1000,7 +1020,7 @@ def admin_create_user(request):
     user.username      = data['username']
     user.password      = make_password(data['password'])
     user.fullname      = data.get('fullname', '')
-    user.email         = data['email']
+    user.email         = _normalize_email(data['email'])
     user.phone_number  = data['phone_number']
     user.date_of_birth = data.get('date_of_birth', '')
     user.status        = user_status
@@ -1065,7 +1085,13 @@ def update_profile(request):
             updated_fields.append('username')
 
     if 'email' in data:
-        user.email = data['email'].strip()
+        new_email = _normalize_email(data['email'])
+        if new_email != user.email and _email_taken(new_email):
+            return Response(
+                {'error': 'Пользователь с такой почтой уже существует. Укажите другой email.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user.email = new_email
         updated_fields.append('email')
 
     if 'phone_number' in data:
@@ -1176,7 +1202,11 @@ def change_avatar(request):
 @extend_schema(
     tags=['Users'],
     summary='Массовая загрузка студентов (admin)',
-    description='Загружает студентов из Excel-файла (.xlsx) и возвращает файл .xlsx с результатами импорта (логины/пароли/ошибки).',
+    description=(
+        'Загружает студентов из Excel-файла (.xlsx) и возвращает файл .xlsx с результатами '
+        'импорта (логины/пароли/ошибки). Колонка "Email" обязательна; строки с пустой или '
+        'уже зарегистрированной почтой помечаются как ошибка и пропускаются.'
+    ),
     parameters=[AUTH_HEADER_PARAM],
     request={'multipart/form-data': BulkImportRequestSerializer},
     responses={
@@ -1210,7 +1240,14 @@ def admin_bulk_import(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    if 'email' not in col_map:
+        return Response(
+            {'error': 'В файле отсутствует колонка "Email" — она обязательна'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     batch_usernames: set = set()
+    batch_emails:    set = set()
     groups_by_name  = {g.name.lower(): g.id for g in Group.collection.fetch(100)}
 
     results = []
@@ -1224,10 +1261,28 @@ def admin_bulk_import(request):
             return str(values[idx]).strip() if idx is not None and values[idx] is not None else ''
 
         fullname      = get('fullname')
-        email         = get('email')
+        email         = _normalize_email(get('email'))
         phone_number  = re.sub(r'[^\d+]', '', get('phone_number'))
         date_of_birth = get('date_of_birth')
         group_name    = get('group')
+
+        # Email обязателен: без него студент не создаётся
+        if not email:
+            results.append((
+                fullname, email, phone_number, group_name, '', '',
+                'Ошибка', 'Поле "Email" обязательно. Укажите почту студента.',
+            ))
+            continue
+
+        # Проверка почты: не создаём студента, если email уже занят в базе
+        # или повторяется в этом же файле
+        if email in batch_emails or _email_taken(email):
+            results.append((
+                fullname, email, phone_number, group_name, '', '',
+                'Ошибка', 'Пользователь с такой почтой уже существует. Укажите другую почту.',
+            ))
+            continue
+        batch_emails.add(email)
 
         username = _generate_username(fullname or 'student', batch_usernames)
         password = _generate_password()

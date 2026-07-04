@@ -35,3 +35,12 @@ def _validate_phone(phone: str):
 
 def _username_taken(username: str) -> bool:
     return bool(list(User.collection.filter('username', '==', username).fetch(1)))
+
+
+def _normalize_email(email: str) -> str:
+    """Приводит email к каноничному виду: без пробелов по краям, в нижнем регистре."""
+    return (email or '').strip().lower()
+
+
+def _email_taken(email: str) -> bool:
+    return bool(list(User.collection.filter('email', '==', _normalize_email(email)).fetch(1)))
