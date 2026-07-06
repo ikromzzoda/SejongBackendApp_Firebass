@@ -22,7 +22,7 @@ DEBUG = False  # В продакшене всегда False! В .env можно 
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 
-SECURE_SSL_REDIRECT = False  # В продакшене True, в .env можно переопределить на False для локальной разработки
+SECURE_SSL_REDIRECT = True  # В продакшене True, в .env можно переопределить на False для локальной разработки
 
 SECURE_PROXY_SSL_HEADER = (
     'HTTP_X_FORWARDED_PROTO',

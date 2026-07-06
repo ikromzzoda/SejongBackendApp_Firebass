@@ -50,7 +50,7 @@ def _send_email_verification_code(user, now):
             message=(
                 f'Ваш код подтверждения email: {code}\n\n'
                 f'Код действует {EMAIL_CODE_LIFETIME_MINUTES} минут.\n'
-                'Если вы не регистрировались в Sejong, просто проигнорируйте это письмо.'
+                'Если вы не запрашивали этот код, просто проигнорируйте это письмо.'
             ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],

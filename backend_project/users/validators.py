@@ -1,5 +1,8 @@
 import re
 
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
+
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -37,9 +40,23 @@ def _username_taken(username: str) -> bool:
     return bool(list(User.collection.filter('username', '==', username).fetch(1)))
 
 
-def _normalize_email(email: str) -> str:
+def _normalize_email(email) -> str:
     """Приводит email к каноничному виду: без пробелов по краям, в нижнем регистре."""
-    return (email or '').strip().lower()
+    if not isinstance(email, str):
+        return ''
+    return email.strip().lower()
+
+
+def _validate_email(email: str):
+    """Проверяет формат email. Возвращает Response с ошибкой или None."""
+    try:
+        validate_email(email)
+    except ValidationError:
+        return Response(
+            {'error': 'Некорректный email. Укажите действительный адрес почты.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return None
 
 
 def _email_taken(email: str) -> bool:

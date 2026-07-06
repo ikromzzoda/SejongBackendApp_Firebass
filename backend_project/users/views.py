@@ -67,6 +67,7 @@ from .validators import (
     VALID_STATUSES,
     _require_fields,
     _validate_phone,
+    _validate_email,
     _username_taken,
     _email_taken,
     _normalize_email,
@@ -754,7 +755,12 @@ def admin_get_user(request, user_id):
 @extend_schema(
     tags=['Users'],
     summary='Редактировать пользователя (admin)',
-    description='Частичное обновление данных пользователя. Передавайте только изменяемые поля.',
+    description=(
+        'Частичное обновление данных пользователя. Передавайте только изменяемые поля. '
+        'При смене email на новую почту отправляется 6-значный код подтверждения '
+        f'(действует {EMAIL_CODE_LIFETIME_MINUTES} минут) — до подтверждения через '
+        '/users/register/verify/ вход для пользователя будет недоступен.'
+    ),
     parameters=[AUTH_HEADER_PARAM],
     request=AdminEditUserRequestSerializer,
     responses={
@@ -784,13 +790,19 @@ def admin_edit_user(request, user_id):
 
     if 'email' in data:
         new_email = _normalize_email(data['email'])
-        if new_email != user.email and _email_taken(new_email):
-            return Response(
-                {'error': 'Пользователь с такой почтой уже существует. Укажите другой email.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        user.email = new_email
-        updated_fields.append('email')
+        err = _validate_email(new_email)
+        if err:
+            return err
+        if new_email != user.email:
+            if _email_taken(new_email):
+                return Response(
+                    {'error': 'Пользователь с такой почтой уже существует. Укажите другой email.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user.email = new_email
+            user.email_verified = False
+            _send_email_verification_code(user, datetime.now(timezone.utc))
+            updated_fields.append('email')
 
     if 'phone_number' in data:
         phone = data['phone_number'].strip()
@@ -857,8 +869,16 @@ def admin_edit_user(request, user_id):
 
     user.update()
     log_action(request, 'update', 'User', user_id, {'updated_fields': updated_fields})
+
+    message = 'Данные пользователя обновлены'
+    if 'email' in updated_fields:
+        message += (
+            '. На новую почту отправлен 6-значный код — пользователь должен '
+            'подтвердить email, иначе вход будет недоступен.'
+        )
+
     return Response({
-        'message': 'Данные пользователя обновлены',
+        'message': message,
         'updated_fields': updated_fields,
         'user': _user_dict(user),
     })
@@ -1047,7 +1067,12 @@ def admin_create_user(request):
 @extend_schema(
     tags=['Users'],
     summary='Обновить профиль',
-    description='Частичное обновление своего профиля. Для смены пароля обязательно передать текущий пароль в поле "check_password".',
+    description=(
+        'Частичное обновление своего профиля. Для смены пароля обязательно передать '
+        'текущий пароль в поле "check_password". При смене email на новую почту '
+        f'отправляется 6-значный код подтверждения (действует {EMAIL_CODE_LIFETIME_MINUTES} '
+        'минут) — до подтверждения через /users/register/verify/ вход будет недоступен.'
+    ),
     parameters=[AUTH_HEADER_PARAM],
     request=UpdateProfileRequestSerializer,
     responses={
@@ -1086,13 +1111,19 @@ def update_profile(request):
 
     if 'email' in data:
         new_email = _normalize_email(data['email'])
-        if new_email != user.email and _email_taken(new_email):
-            return Response(
-                {'error': 'Пользователь с такой почтой уже существует. Укажите другой email.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        user.email = new_email
-        updated_fields.append('email')
+        err = _validate_email(new_email)
+        if err:
+            return err
+        if new_email != user.email:
+            if _email_taken(new_email):
+                return Response(
+                    {'error': 'Пользователь с такой почтой уже существует. Укажите другой email.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user.email = new_email
+            user.email_verified = False
+            _send_email_verification_code(user, datetime.now(timezone.utc))
+            updated_fields.append('email')
 
     if 'phone_number' in data:
         phone = data['phone_number'].strip()
@@ -1126,10 +1157,85 @@ def update_profile(request):
         verification_status=user.verification_status,
     )
 
+    message = 'Профиль обновлён'
+    if 'email' in updated_fields:
+        message += (
+            '. Мы отправили 6-значный код на новую почту — подтвердите email '
+            'через /users/register/verify/, иначе вход будет недоступен.'
+        )
+
     return Response({
-        'message': 'Профиль обновлён',
+        'message': message,
         'updated_fields': updated_fields,
         'token': new_token,
+    })
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Профиль — отправить код подтверждения email повторно',
+    description=(
+        'Повторно отправляет 6-значный код подтверждения на email текущего пользователя '
+        '(например, после смены почты в профиле). Повторная отправка — не чаще раза в '
+        f'{EMAIL_CODE_RESEND_SECONDS // 60} минут. В отличие от /users/register/resend-code/ '
+        'эндпоинт авторизованный, поэтому отвечает честно: код отправлен, email уже '
+        'подтверждён или сработал лимит повторной отправки (429, поле retry_after_seconds).'
+    ),
+    parameters=[AUTH_HEADER_PARAM],
+    responses={
+        200: MessageResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        429: ErrorResponseSerializer,
+        **UNAUTHORIZED_RESPONSES,
+    },
+)
+@api_view(['POST'])
+@jwt_required
+def profile_resend_email_code(request):
+    """Повторная отправка кода подтверждения email для авторизованного пользователя."""
+    user_id = request.user_payload.get('user_id', '')
+    try:
+        user = User.collection.get(f'users/{user_id}')
+    except Exception:
+        user = None
+    if not user:
+        return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not user.email:
+        return Response(
+            {'error': 'У профиля не указан email. Сначала укажите почту через /users/profile/update/.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if user.email_verified:
+        return Response(
+            {'error': 'Email уже подтверждён, отправка кода не требуется.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    now = datetime.now(timezone.utc)
+    if user.email_code_sent_at:
+        elapsed = (now - user.email_code_sent_at).total_seconds()
+        if elapsed < EMAIL_CODE_RESEND_SECONDS:
+            retry_after = int(EMAIL_CODE_RESEND_SECONDS - elapsed)
+            minutes_left = max(1, -(-retry_after // 60))  # округление вверх
+            return Response(
+                {
+                    'error': f'Код уже отправлен. Повторная отправка возможна через {minutes_left} мин.',
+                    'retry_after_seconds': retry_after,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+    _send_email_verification_code(user, now)
+    user.update()
+
+    return Response({
+        'message': (
+            f'Код отправлен на {user.email}. Код действует {EMAIL_CODE_LIFETIME_MINUTES} минут. '
+            'Подтвердите email через /users/register/verify/.'
+        ),
     })
 
 
