@@ -38,6 +38,9 @@ class User(Model):
     # Подтверждение email при регистрации: та же схема, что и сброс пароля —
     # хранится только хэш 6-значного кода, сам код уходит на email
     email_verified      = BooleanField()
+    # Смена почты в профиле: новая почта живёт здесь до подтверждения кодом,
+    # поле email остаётся прежним (и рабочим) до успешного verify
+    pending_email       = TextField()
     email_code_hash     = TextField()
     email_code_expires  = DateTime()
     email_code_attempts = NumberField()

@@ -191,8 +191,9 @@ def register(request):
     tags=['Users'],
     summary='Регистрация — подтвердить email',
     description=(
-        'Проверяет 6-значный код из письма, отправленного при регистрации. При верном коде '
-        'email считается подтверждённым и пользователь может войти. После '
+        'Проверяет 6-значный код из письма, отправленного при регистрации или при смене '
+        'почты в профиле. При верном коде email считается подтверждённым; если шла смена '
+        'почты, новая почта (передайте её в поле "email") записывается в профиль. После '
         f'{EMAIL_CODE_MAX_ATTEMPTS} неверных попыток код аннулируется — нужно запросить новый '
         'через resend-code.'
     ),
@@ -213,7 +214,14 @@ def verify_email(request):
     users = list(User.collection.filter('email', '==', email).fetch(1))
     user  = users[0] if users else None
 
-    if user and user.email_verified:
+    # Смена почты через профиль: новая почта до подтверждения лежит в pending_email
+    is_pending_change = False
+    if not user:
+        users = list(User.collection.filter('pending_email', '==', email).fetch(1))
+        user  = users[0] if users else None
+        is_pending_change = user is not None
+
+    if user and user.email_verified and not is_pending_change:
         return Response({'message': 'Email уже подтверждён. Можете войти.'})
 
     if not user or not user.email_code_hash:
@@ -248,10 +256,24 @@ def verify_email(request):
         )
 
     # Код верный: подтверждаем email и аннулируем код
+    if is_pending_change:
+        # Пока пользователь подтверждал почту, её мог занять кто-то другой
+        if _email_taken(email):
+            user.pending_email = ''
+            _clear_email_code(user)
+            user.update()
+            return Response(
+                {'error': 'Эта почта уже занята другим пользователем. Укажите другой email.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user.email         = email
+        user.pending_email = ''
     user.email_verified = True
     _clear_email_code(user)
     user.update()
 
+    if is_pending_change:
+        return Response({'message': 'Почта подтверждена и обновлена в профиле.'})
     return Response({'message': 'Email подтверждён. Теперь вы можете войти.'})
 
 
@@ -276,11 +298,19 @@ def resend_email_code(request):
         return Response({'error': 'Поле "email" обязательно'}, status=status.HTTP_400_BAD_REQUEST)
 
     users = list(User.collection.filter('email', '==', email).fetch(1))
-    if not users or users[0].email_verified:
+    user  = users[0] if users else None
+
+    # Смена почты через профиль: новая почта до подтверждения лежит в pending_email
+    is_pending_change = False
+    if not user:
+        users = list(User.collection.filter('pending_email', '==', email).fetch(1))
+        user  = users[0] if users else None
+        is_pending_change = user is not None
+
+    if not user or (user.email_verified and not is_pending_change):
         return Response({'message': RESEND_CODE_MESSAGE})
 
-    user = users[0]
-    now  = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
 
     # Rate limit: не отправляем новый код, если предыдущий ушёл недавно
     if user.email_code_sent_at and (now - user.email_code_sent_at).total_seconds() < EMAIL_CODE_RESEND_SECONDS:
@@ -671,6 +701,7 @@ def get_profile(request):
         'username':            user.username or '',
         'fullname':            user.fullname or '',
         'email':               user.email or '',
+        'pending_email':       user.pending_email or '',
         'phone_number':        user.phone_number or '',
         'date_of_birth':       user.date_of_birth or '',
         'status':              user.status or '',
@@ -801,6 +832,7 @@ def admin_edit_user(request, user_id):
                 )
             user.email = new_email
             user.email_verified = False
+            user.pending_email = ''  # админская смена перекрывает незавершённую смену из профиля
             _send_email_verification_code(user, datetime.now(timezone.utc))
             updated_fields.append('email')
 
@@ -1069,9 +1101,12 @@ def admin_create_user(request):
     summary='Обновить профиль',
     description=(
         'Частичное обновление своего профиля. Для смены пароля обязательно передать '
-        'текущий пароль в поле "check_password". При смене email на новую почту '
-        f'отправляется 6-значный код подтверждения (действует {EMAIL_CODE_LIFETIME_MINUTES} '
-        'минут) — до подтверждения через /users/register/verify/ вход будет недоступен.'
+        'текущий пароль в поле "check_password". При смене email новая почта сохраняется '
+        'как pending_email и на неё отправляется 6-значный код подтверждения (действует '
+        f'{EMAIL_CODE_LIFETIME_MINUTES} минут). Почта в профиле меняется только после '
+        'подтверждения кода через /users/register/verify/ (в поле "email" передать новую '
+        'почту); до этого действует прежний email. Повторная отправка того же email — '
+        'код заново не отправляется. Передача текущего email отменяет незавершённую смену.'
     ),
     parameters=[AUTH_HEADER_PARAM],
     request=UpdateProfileRequestSerializer,
@@ -1109,20 +1144,35 @@ def update_profile(request):
             user.username = new_username
             updated_fields.append('username')
 
+    email_change_cancelled = False
     if 'email' in data:
         new_email = _normalize_email(data['email'])
         err = _validate_email(new_email)
         if err:
             return err
-        if new_email != user.email:
+        if new_email == user.email:
+            # Почта не меняется; если была незавершённая смена — отменяем её
+            if user.pending_email:
+                user.pending_email = ''
+                _clear_email_code(user)
+                email_change_cancelled = True
+                updated_fields.append('email')
+        else:
             if _email_taken(new_email):
                 return Response(
                     {'error': 'Пользователь с такой почтой уже существует. Укажите другой email.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            user.email = new_email
-            user.email_verified = False
-            _send_email_verification_code(user, datetime.now(timezone.utc))
+            now = datetime.now(timezone.utc)
+            # Та же почта уже ждёт подтверждения и код ушёл недавно — письмо повторно не шлём
+            already_sent = (
+                new_email == user.pending_email
+                and user.email_code_sent_at
+                and (now - user.email_code_sent_at).total_seconds() < EMAIL_CODE_RESEND_SECONDS
+            )
+            user.pending_email = new_email
+            if not already_sent:
+                _send_email_verification_code(user, now)
             updated_fields.append('email')
 
     if 'phone_number' in data:
@@ -1159,10 +1209,14 @@ def update_profile(request):
 
     message = 'Профиль обновлён'
     if 'email' in updated_fields:
-        message += (
-            '. Мы отправили 6-значный код на новую почту — подтвердите email '
-            'через /users/register/verify/, иначе вход будет недоступен.'
-        )
+        if email_change_cancelled:
+            message += '. Незавершённая смена почты отменена.'
+        else:
+            message += (
+                f'. Мы отправили 6-значный код на {user.pending_email} — подтвердите новую '
+                'почту через /users/register/verify/. До подтверждения в профиле действует '
+                'прежний email.'
+            )
 
     return Response({
         'message': message,
@@ -1175,13 +1229,15 @@ def update_profile(request):
     tags=['Users'],
     summary='Профиль — отправить код подтверждения email повторно',
     description=(
-        'Повторно отправляет 6-значный код подтверждения на email текущего пользователя '
-        '(например, после смены почты в профиле). Повторная отправка — не чаще раза в '
+        'Повторно отправляет 6-значный код подтверждения на email текущего пользователя. '
+        'Если начата смена почты (есть pending_email), код уходит на новую почту. '
+        'Повторная отправка — не чаще раза в '
         f'{EMAIL_CODE_RESEND_SECONDS // 60} минут. В отличие от /users/register/resend-code/ '
         'эндпоинт авторизованный, поэтому отвечает честно: код отправлен, email уже '
         'подтверждён или сработал лимит повторной отправки (429, поле retry_after_seconds).'
     ),
     parameters=[AUTH_HEADER_PARAM],
+    request=None,
     responses={
         200: MessageResponseSerializer,
         400: ErrorResponseSerializer,
@@ -1202,13 +1258,15 @@ def profile_resend_email_code(request):
     if not user:
         return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
 
-    if not user.email:
+    # Незавершённая смена почты имеет приоритет: код шлём на новую почту
+    target_email = user.pending_email or user.email
+    if not target_email:
         return Response(
             {'error': 'У профиля не указан email. Сначала укажите почту через /users/profile/update/.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    if user.email_verified:
+    if user.email_verified and not user.pending_email:
         return Response(
             {'error': 'Email уже подтверждён, отправка кода не требуется.'},
             status=status.HTTP_400_BAD_REQUEST,
@@ -1233,7 +1291,7 @@ def profile_resend_email_code(request):
 
     return Response({
         'message': (
-            f'Код отправлен на {user.email}. Код действует {EMAIL_CODE_LIFETIME_MINUTES} минут. '
+            f'Код отправлен на {target_email}. Код действует {EMAIL_CODE_LIFETIME_MINUTES} минут. '
             'Подтвердите email через /users/register/verify/.'
         ),
     })

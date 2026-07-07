@@ -36,7 +36,9 @@ def _clear_email_code(user):
 
 def _send_email_verification_code(user, now):
     """Генерирует 6-значный код, сохраняет его хэш на пользователе и шлёт код на почту.
-    Поля пользователя только выставляются — save/update вызывает вызывающий код.
+    Если у пользователя есть pending_email (незавершённая смена почты), код уходит туда,
+    иначе — на основной email. Поля пользователя только выставляются — save/update
+    вызывает вызывающий код.
     """
     code = f'{secrets.randbelow(1_000_000):06d}'
     user.email_code_hash     = make_password(code)
@@ -53,7 +55,7 @@ def _send_email_verification_code(user, now):
                 'Если вы не запрашивали этот код, просто проигнорируйте это письмо.'
             ),
             from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
+            recipient_list=[user.pending_email or user.email],
             fail_silently=False,
         )
     except Exception:

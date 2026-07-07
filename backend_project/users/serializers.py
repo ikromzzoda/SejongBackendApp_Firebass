@@ -32,6 +32,9 @@ class ProfileSerializer(serializers.Serializer):
     username = serializers.CharField()
     fullname = serializers.CharField()
     email = serializers.CharField()
+    pending_email = serializers.CharField(
+        help_text="Новая почта, ожидающая подтверждения кодом; пустая строка, если смены нет"
+    )
     phone_number = serializers.CharField()
     date_of_birth = serializers.CharField()
     status = serializers.ChoiceField(choices=STATUS_CHOICES)
