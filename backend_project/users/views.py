@@ -918,6 +918,43 @@ def admin_edit_user(request, user_id):
 
 @extend_schema(
     tags=['Users'],
+    summary='Сменить аватар пользователя (admin)',
+    description='Заменить аватар любого пользователя по ID (multipart/form-data, поле "avatar").',
+    parameters=[AUTH_HEADER_PARAM],
+    request={'multipart/form-data': ChangeAvatarRequestSerializer},
+    responses={
+        200: ChangeAvatarResponseSerializer,
+        400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        502: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
+@api_view(['POST'])
+@admin_required
+def admin_change_avatar(request, user_id):
+    """Заменить аватар указанного пользователя (multipart/form-data, поле "avatar")."""
+    try:
+        user = User.collection.get(f'users/{user_id}')
+    except Exception:
+        user = None
+    if not user:
+        return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
+
+    new_url, err = _replace_avatar(user, request.FILES.get('avatar'))
+    if err:
+        return err
+
+    log_action(request, 'update', 'User', user_id, {'updated_fields': ['avatar']})
+
+    return Response({
+        'message': f'Аватар пользователя "{user.username}" успешно обновлён',
+        'avatar': new_url,
+    })
+
+
+@extend_schema(
+    tags=['Users'],
     summary='Подтвердить/отклонить верификацию (admin)',
     description='При подтверждении статус пользователя меняется на "Student".',
     parameters=[AUTH_HEADER_PARAM],
@@ -1297,6 +1334,43 @@ def profile_resend_email_code(request):
     })
 
 
+def _replace_avatar(user, file):
+    """Проверить файл, удалить старый аватар и загрузить новый на Google Drive.
+
+    Возвращает (new_url, None) при успехе или (None, Response) с ошибкой.
+    """
+    if not file:
+        return None, Response({'error': 'Файл не передан. Используйте поле "avatar"'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        return None, Response(
+            {'error': 'Недопустимый формат. Разрешены: JPEG, PNG, WEBP'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if file.size > MAX_AVATAR_SIZE:
+        return None, Response({'error': 'Файл слишком большой. Максимум 3 МБ'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if user.avatar_id:
+        try:
+            delete_avatar(user.avatar_id)
+        except Exception:
+            pass
+
+    ext = file.name.rsplit('.', 1)[-1] if '.' in file.name else 'jpg'
+    filename = f"avatar_{user.id}.{ext}"
+
+    try:
+        new_file_id, new_url = upload_avatar(file, filename, file.content_type)
+    except Exception as e:
+        return None, Response({'error': f'Ошибка загрузки на Google Drive: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+
+    user.avatar    = new_url
+    user.avatar_id = new_file_id
+    user.update()
+    return new_url, None
+
+
 @extend_schema(
     tags=['Users'],
     summary='Сменить аватар',
@@ -1314,19 +1388,6 @@ def profile_resend_email_code(request):
 @jwt_required
 def change_avatar(request):
     """Заменить аватар пользователя (multipart/form-data, поле "avatar")."""
-    file = request.FILES.get('avatar')
-    if not file:
-        return Response({'error': 'Файл не передан. Используйте поле "avatar"'}, status=status.HTTP_400_BAD_REQUEST)
-
-    if file.content_type not in ALLOWED_IMAGE_TYPES:
-        return Response(
-            {'error': 'Недопустимый формат. Разрешены: JPEG, PNG, WEBP'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    if file.size > MAX_AVATAR_SIZE:
-        return Response({'error': 'Файл слишком большой. Максимум 3 МБ'}, status=status.HTTP_400_BAD_REQUEST)
-
     user_id = request.user_payload['user_id']
     try:
         user = User.collection.get(f'users/{user_id}')
@@ -1335,23 +1396,9 @@ def change_avatar(request):
     if not user:
         return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
 
-    if user.avatar_id:
-        try:
-            delete_avatar(user.avatar_id)
-        except Exception:
-            pass
-
-    ext = file.name.rsplit('.', 1)[-1] if '.' in file.name else 'jpg'
-    filename = f"avatar_{user_id}.{ext}"
-
-    try:
-        new_file_id, new_url = upload_avatar(file, filename, file.content_type)
-    except Exception as e:
-        return Response({'error': f'Ошибка загрузки на Google Drive: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
-
-    user.avatar    = new_url
-    user.avatar_id = new_file_id
-    user.update()
+    new_url, err = _replace_avatar(user, request.FILES.get('avatar'))
+    if err:
+        return err
 
     return Response({
         'message': 'Аватар успешно обновлён',

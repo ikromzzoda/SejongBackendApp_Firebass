@@ -45,6 +45,7 @@ Authorization: Bearer <token>
 | POST | `/admin/users/create/` | Admin | Создать пользователя |
 | GET | `/admin/users/<user_id>/` | Admin | Получить пользователя |
 | PATCH | `/admin/users/<user_id>/edit/` | Admin | Редактировать пользователя |
+| POST | `/admin/users/<user_id>/avatar/` | Admin | Сменить аватар пользователя |
 | POST | `/admin/verify/<user_id>/` | Admin | Подтвердить / отклонить |
 | POST | `/admin/set-status/<user_id>/` | Admin | Назначить статус |
 | GET | `/admin/students/import/template/` | Admin | Скачать шаблон Excel |
@@ -705,6 +706,39 @@ Authorization: Bearer <token>
 | 404 | `{"error": "Пользователь не найден"}` |
 | 404 | `{"error": "Группа не найдена"}` |
 | 404 | `{"error": "Группа \"CS-999\" не найдена"}` |
+
+---
+
+### POST `/admin/users/<user_id>/avatar/`
+
+Заменить аватар любого пользователя. Старый файл удаляется с Google Drive автоматически.
+
+**Headers:** `Authorization: Bearer <admin_token>`
+
+**Body (multipart/form-data):**
+
+| Поле | Тип | Ограничения |
+|------|-----|-------------|
+| `avatar` | File | JPEG / PNG / WEBP, максимум **3 МБ** |
+
+```json
+// 200 — успех
+{
+    "message": "Аватар пользователя \"john_doe\" успешно обновлён",
+    "avatar": "https://drive.google.com/uc?id=..."
+}
+```
+
+**Ошибки:**
+
+| Код | Ответ |
+|-----|-------|
+| 400 | `{"error": "Файл не передан. Используйте поле \"avatar\""}` |
+| 400 | `{"error": "Недопустимый формат. Разрешены: JPEG, PNG, WEBP"}` |
+| 400 | `{"error": "Файл слишком большой. Максимум 3 МБ"}` |
+| 403 | `{"error": "Доступ запрещён. Требуются права администратора."}` |
+| 404 | `{"error": "Пользователь не найден"}` |
+| 502 | `{"error": "Ошибка загрузки на Google Drive: ..."}` |
 
 ---
 
