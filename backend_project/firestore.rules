@@ -1,0 +1,35 @@
+rules_version = '2';
+
+// Security rules для мобильных клиентов (Firebase SDK).
+// Django-бэкенд ходит через Admin SDK (сервисный аккаунт) и правила игнорирует.
+//
+// Клиент получает custom token через GET /api/chat/firebase-token/ —
+// в нём claim group_id текущей группы студента. Читать можно только
+// чат своей группы; вся запись — только через Django API.
+//
+// Деплой: Firebase Console → Firestore Database → Rules → вставить и Publish,
+// либо `firebase deploy --only firestore:rules` при настроенном Firebase CLI.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Чат группы: groups/{groupId}/chat_messages/{messageId}
+    match /groups/{groupId}/chat_messages/{messageId} {
+      allow read: if request.auth != null
+                  && request.auth.token.group_id == groupId;
+      allow write: if false;
+    }
+
+    // Указатели чтения («кто посмотрел»): groups/{groupId}/chat_read_status/{userId}
+    match /groups/{groupId}/chat_read_status/{userId} {
+      allow read: if request.auth != null
+                  && request.auth.token.group_id == groupId;
+      allow write: if false;
+    }
+
+    // Всё остальное клиентам недоступно
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

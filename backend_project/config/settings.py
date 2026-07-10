@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     "info",
     "announcements",
     "audit_logs",
+    "chat_group",
 ]
 
 MIDDLEWARE = [
