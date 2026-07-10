@@ -20,6 +20,7 @@ urlpatterns = [
     path('admin/users/<str:user_id>/',            views.admin_get_user,      name='admin-users-get'),
     path('admin/users/<str:user_id>/edit/',       views.admin_edit_user,     name='admin-users-edit'),
     path('admin/users/<str:user_id>/avatar/',     views.admin_change_avatar, name='admin-users-avatar'),
+    path('admin/users/<str:user_id>/delete/',     views.admin_delete_user,   name='admin-users-delete'),
     path('admin/verify/<str:user_id>/',           views.admin_verify_user,   name='admin-verify'),
     path('admin/set-status/<str:user_id>/',       views.admin_set_status,    name='admin-set-status'),
 

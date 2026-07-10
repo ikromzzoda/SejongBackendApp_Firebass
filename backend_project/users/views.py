@@ -1046,6 +1046,72 @@ def admin_set_status(request, user_id):
 
 @extend_schema(
     tags=['Users'],
+    summary='Удалить пользователя (admin)',
+    description=(
+        'Удаляет любого пользователя, кроме администраторов (проверка по статусу). '
+        'Вместе с аккаунтом удаляются аватар с Google Drive и указатель чтения чата; '
+        'refresh-токен отзывается сразу, выданный access-токен доживает свой срок '
+        '(максимум 1 день), но все эндпоинты, читающие пользователя, вернут 404. '
+        'Сообщения пользователя в чате группы сохраняются (имя и аватар в них '
+        'денормализованы).'
+    ),
+    parameters=[AUTH_HEADER_PARAM],
+    responses={
+        200: MessageResponseSerializer,
+        404: ErrorResponseSerializer,
+        **ADMIN_RESPONSES,
+    },
+)
+@api_view(['DELETE'])
+@admin_required
+def admin_delete_user(request, user_id):
+    try:
+        user = User.collection.get(f'users/{user_id}')
+    except Exception:
+        user = None
+    if not user:
+        return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
+
+    if user.status == 'Admin':
+        return Response(
+            {'error': 'Нельзя удалить администратора. Сначала смените ему статус.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Отзыв refresh-токена: сам документ пользователя исчезнет, но blacklist
+    # закрывает и путь через уже выданный refresh
+    if user.refresh_token_jti:
+        try:
+            bt = BlacklistedToken()
+            bt.id = user.refresh_token_jti
+            bt.save()
+        except Exception:
+            pass
+
+    # Аватар с Google Drive (у дефолтного avatar_id пуст)
+    if user.avatar_id:
+        try:
+            delete_avatar(user.avatar_id)
+        except Exception:
+            pass
+
+    # Указатель чтения в чате группы
+    if user.group:
+        try:
+            from chat_group.models import ChatReadStatus
+            ChatReadStatus.collection.delete(f'groups/{user.group}/chat_read_status/{user_id}')
+        except Exception:
+            pass
+
+    username_label = user.fullname or user.username
+    deleted_info = {'username': user.username, 'fullname': user.fullname or '', 'status': user.status}
+    User.collection.delete(f'users/{user_id}')
+    log_action(request, 'delete', 'User', user_id, deleted_info)
+    return Response({'message': f'Пользователь "{username_label}" удалён'})
+
+
+@extend_schema(
+    tags=['Users'],
     summary='Создать пользователя (admin)',
     description='Создать нового пользователя вручную. Верификация выставляется сразу как "Approved".',
     parameters=[AUTH_HEADER_PARAM],
