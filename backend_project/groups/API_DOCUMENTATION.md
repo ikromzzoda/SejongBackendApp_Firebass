@@ -44,11 +44,15 @@ Authorization: Bearer <admin_token>
     "total": 2,
     "has_more": false,
     "groups": [
-        { "id": "AbCdEf...", "name": "CS-101" },
-        { "id": "XyZwVu...", "name": "CS-102" }
+        { "id": "AbCdEf...", "name": "CS-101", "teacher_id": "TuVwXy...", "students_count": 12, "created_at": "2026-07-11 09:15:00+00:00" },
+        { "id": "XyZwVu...", "name": "CS-102", "teacher_id": "", "students_count": 0, "created_at": "2026-07-11 10:20:00+00:00" }
     ]
 }
 ```
+
+- `teacher_id` — ID пользователя со статусом `Teacher`, состоящего в группе; пустая строка, если преподаватель не назначен.
+- `students_count` — количество пользователей группы со статусом `Student`.
+- `created_at` — дата создания группы (может быть пустой у групп, созданных до добавления поля).
 
 > Если `has_more: true` — запросите следующую страницу с увеличенным `limit`.
 

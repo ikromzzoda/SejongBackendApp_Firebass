@@ -20,10 +20,18 @@ class GroupMemberSerializer(serializers.Serializer):
     group = serializers.CharField()
 
 
+class GroupListItemSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    name = serializers.CharField()
+    teacher_id = serializers.CharField(help_text='ID преподавателя группы (пусто, если не назначен)')
+    students_count = serializers.IntegerField()
+    created_at = serializers.CharField()
+
+
 class AdminListGroupsResponseSerializer(serializers.Serializer):
     total = serializers.IntegerField()
     has_more = serializers.BooleanField()
-    groups = GroupSerializer(many=True)
+    groups = GroupListItemSerializer(many=True)
 
 
 class AdminCreateGroupRequestSerializer(serializers.Serializer):

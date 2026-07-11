@@ -56,6 +56,7 @@ def _get_user_or_404(user_id):
 @extend_schema(
     tags=['Groups'],
     summary='Список групп (admin)',
+    description='Для каждой группы возвращает ID преподавателя (пользователь со статусом Teacher в этой группе) и количество студентов.',
     parameters=[
         AUTH_HEADER_PARAM,
         OpenApiParameter('limit', OpenApiTypes.INT, description='Максимум записей (по умолчанию 20, максимум 100)'),
@@ -72,7 +73,28 @@ def admin_list_groups(request):
 
     raw = list(Group.collection.fetch(limit + 1))
     has_more = len(raw) > limit
-    groups = [{'id': g.id, 'name': g.name} for g in raw[:limit]]
+
+    # Один проход по пользователям вместо двух запросов на каждую группу
+    teacher_by_group: dict[str, str] = {}
+    students_by_group: dict[str, int] = {}
+    for u in User.collection.fetch(1000):
+        if not u.group:
+            continue
+        if u.status == 'Teacher' and u.group not in teacher_by_group:
+            teacher_by_group[u.group] = u.id
+        elif u.status == 'Student':
+            students_by_group[u.group] = students_by_group.get(u.group, 0) + 1
+
+    groups = [
+        {
+            'id':             g.id,
+            'name':           g.name,
+            'teacher_id':     teacher_by_group.get(g.id, ''),
+            'students_count': students_by_group.get(g.id, 0),
+            'created_at':     str(g.created_at) if g.created_at else '',
+        }
+        for g in raw[:limit]
+    ]
     return Response({'total': len(groups), 'has_more': has_more, 'groups': groups})
 
 
