@@ -12,7 +12,7 @@ venv/
 .venv/
 
 
-# # Env файлы
+# Env файлы
 .env
 .env.*
 !.env.example

@@ -73,6 +73,31 @@ def _schedule_dict(s, group_name='', teacher_name='') -> dict:
     }
 
 
+def _grouped_schedules(schedules, groups_cache, teachers_cache) -> list:
+    """Группирует записи расписания по группам: одна запись на группу со всеми уроками."""
+    schedules = sorted(schedules, key=lambda s: (s.day if s.day is not None else 7, s.start_time or ''))
+    grouped = {}
+    for s in schedules:
+        item = grouped.get(s.group_id)
+        if item is None:
+            item = grouped[s.group_id] = {
+                'group_id':     s.group_id,
+                'group_name':   groups_cache.get(s.group_id, ''),
+                'teacher_name': teachers_cache.get(s.teacher_id, ''),
+                'book':         s.book,
+                'lessons':      [],
+            }
+        item['lessons'].append({
+            'id':         s.id,
+            'day':        s.day,
+            'day_name':   DAY_NAMES[s.day] if s.day is not None and 0 <= s.day <= 6 else '',
+            'start_time': s.start_time or '',
+            'end_time':   s.end_time or '',
+            'classroom':  s.classroom,
+        })
+    return sorted(grouped.values(), key=lambda g: g['group_name'])
+
+
 def _build_caches():
     groups   = {g.id: g.name or '' for g in Group.collection.fetch(200)}
     teachers = {u.id: u.fullname or '' for u in User.collection.filter('status', '==', 'Teacher').fetch(200)}
@@ -301,30 +326,21 @@ def admin_list_schedules(request):
         if not group:
             return Response({'error': f'Группа "{group_name}" не найдена'}, status=status.HTTP_404_NOT_FOUND)
         schedules = list(Schedule.collection.filter('group_id', '==', group.id).fetch(7))
+        groups_cache   = {group.id: group.name or ''}
         teachers_cache = _build_teachers_cache({s.teacher_id for s in schedules})
-        result = [
-            _schedule_dict(s, group.name or '', teachers_cache.get(s.teacher_id, ''))
-            for s in schedules
-        ]
     elif teacher_name:
         teacher = _lookup_teacher(teacher_name)
         if not teacher:
             return Response({'error': f'Учитель "{teacher_name}" не найден'}, status=status.HTTP_404_NOT_FOUND)
         schedules = list(Schedule.collection.filter('teacher_id', '==', teacher.id).fetch(100))
-        groups_cache = _build_groups_cache({s.group_id for s in schedules})
-        result = [
-            _schedule_dict(s, groups_cache.get(s.group_id, ''), teacher.fullname or '')
-            for s in schedules
-        ]
+        groups_cache   = _build_groups_cache({s.group_id for s in schedules})
+        teachers_cache = {teacher.id: teacher.fullname or ''}
     else:
         schedules = list(Schedule.collection.fetch(500))
         groups_cache, teachers_cache = _build_caches()
-        result = [
-            _schedule_dict(s, groups_cache.get(s.group_id, ''), teachers_cache.get(s.teacher_id, ''))
-            for s in schedules
-        ]
 
-    total = len(result)
+    result = _grouped_schedules(schedules, groups_cache, teachers_cache)
+    total  = len(result)
     return Response({'total': total, 'schedules': result[offset:offset + limit]})
 
 
@@ -473,16 +489,11 @@ def admin_delete_schedule(request, schedule_id):
 def get_all_schedules(request):
     limit, offset = _pagination_params(request)
     schedules = list(Schedule.collection.fetch(500))
-    schedules.sort(key=lambda s: (s.day if s.day is not None else 7, s.start_time or ''))
     groups_cache, teachers_cache = _build_caches()
-    total = len(schedules)
-    page  = schedules[offset:offset + limit]
+    result = _grouped_schedules(schedules, groups_cache, teachers_cache)
     return Response({
-        'total':     total,
-        'schedules': [
-            _schedule_dict(s, groups_cache.get(s.group_id, ''), teachers_cache.get(s.teacher_id, ''))
-            for s in page
-        ],
+        'total':     len(result),
+        'schedules': result[offset:offset + limit],
     })
 
 

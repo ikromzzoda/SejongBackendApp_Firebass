@@ -56,9 +56,26 @@ class AdminGetScheduleResponseSerializer(serializers.Serializer):
     schedule = ScheduleSerializer()
 
 
+class ScheduleLessonSerializer(serializers.Serializer):
+    id = serializers.CharField(help_text="ID записи расписания")
+    day = serializers.IntegerField(min_value=0, max_value=6, help_text="0 = Monday ... 6 = Sunday")
+    day_name = serializers.CharField()
+    start_time = serializers.CharField(help_text="HH:MM")
+    end_time = serializers.CharField(help_text="HH:MM")
+    classroom = serializers.ChoiceField(choices=VALID_CLASSROOMS)
+
+
+class GroupedScheduleSerializer(serializers.Serializer):
+    group_id = serializers.CharField()
+    group_name = serializers.CharField()
+    teacher_name = serializers.CharField()
+    book = serializers.IntegerField(min_value=1, max_value=8)
+    lessons = ScheduleLessonSerializer(many=True)
+
+
 class AdminListSchedulesResponseSerializer(serializers.Serializer):
-    total = serializers.IntegerField()
-    schedules = ScheduleSerializer(many=True)
+    total = serializers.IntegerField(help_text="Кол-во групп")
+    schedules = GroupedScheduleSerializer(many=True)
 
 
 class GroupScheduleResponseSerializer(serializers.Serializer):
