@@ -29,6 +29,7 @@ from utils.schema import (
     MessageResponseSerializer,
 )
 from audit_logs.utils import log_action
+from chat_group.services import sync_user_avatar_async
 from .serializers import (
     UserSerializer,
     UserDetailSerializer,
@@ -87,7 +88,7 @@ from .services import (
     _generate_username,
     _generate_password,
 )
-from .selectors import _user_dict
+from .selectors import _user_dict, _resolve_group_name
 from .excel import (
     _detect_columns,
     _open_import_workbook,
@@ -707,6 +708,7 @@ def get_profile(request):
         'status':              user.status or '',
         'verification_status': user.verification_status or '',
         'group_id':            user.group or '',
+        'group_name':          _resolve_group_name(user.group or ''),
         'avatar':              user.avatar or '',
         'date_joined':         str(user.date_joined) if user.date_joined else '',
     })
@@ -1434,6 +1436,9 @@ def _replace_avatar(user, file):
     user.avatar    = new_url
     user.avatar_id = new_file_id
     user.update()
+    # Аватар денормализован в документах чата — обновляем его в старых
+    # сообщениях группы, иначе история продолжит показывать прежний аватар
+    sync_user_avatar_async(user.id, user.group or '', new_url)
     return new_url, None
 
 

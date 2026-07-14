@@ -40,6 +40,9 @@ class ProfileSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=STATUS_CHOICES)
     verification_status = serializers.ChoiceField(choices=VERIFICATION_CHOICES)
     group_id = serializers.CharField()
+    group_name = serializers.CharField(
+        help_text="Название группы; пустая строка, если группа не назначена"
+    )
     avatar = serializers.CharField()
     date_joined = serializers.CharField()
 
