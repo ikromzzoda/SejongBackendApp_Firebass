@@ -1,13 +1,15 @@
 import re
 import threading
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 
-from utils.decorators import jwt_required
+from utils.decorators import jwt_required, admin_required
+from utils.drive import upload_chat_file, delete_chat_folder, delete_file
 from utils.fcm import send_chat_message_push
 from utils.schema import AUTH_HEADER_PARAM, UNAUTHORIZED_RESPONSES, ErrorResponseSerializer, MessageResponseSerializer
 from audit_logs.utils import log_action
@@ -23,13 +25,37 @@ from .serializers import (
     MarkReadResponseSerializer,
     ReadStatusResponseSerializer,
     SeenByResponseSerializer,
+    ClearChatResponseSerializer,
 )
 
 MAX_TEXT_LENGTH = 2000
 
+# Вложения: фото и аудио/голосовые
+ALLOWED_CHAT_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}
+ALLOWED_CHAT_AUDIO_TYPES = {
+    'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/aac', 'audio/ogg',
+    'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/m4a', 'audio/x-m4a', 'audio/3gpp',
+}
+MAX_CHAT_IMAGE_SIZE = 3 * 1024 * 1024  # 3 MB
+MAX_CHAT_AUDIO_SIZE = 5 * 1024 * 1024  # 5 MB
+
+# Расширение по MIME, если у файла нет расширения в имени
+_MIME_EXT = {
+    'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+    'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/mp4': 'm4a', 'audio/aac': 'aac',
+    'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/webm': 'webm',
+    'audio/m4a': 'm4a', 'audio/x-m4a': 'm4a', 'audio/3gpp': '3gp',
+}
+
+# Что показывать вместо текста в пушах и reply-цитатах у медиа без подписи
+MEDIA_PLACEHOLDERS = {'image': '📷 Фото', 'voice': '🎤 Голосовое сообщение', 'audio': '🎵 Аудио'}
+
+# Длина снапшота цитируемого сообщения в reply_to_text
+REPLY_SNIPPET_LENGTH = 200
+
 # Сколько ждать перед пушем: если за это время получатель отметил чат
 # прочитанным (сидел в нём с открытым листенером), пуш ему не отправляется
-READ_GRACE_SECONDS = 30
+READ_GRACE_SECONDS = 4
 
 
 def _message_dict(msg) -> dict:
@@ -40,6 +66,13 @@ def _message_dict(msg) -> dict:
         'sender_avatar': msg.sender_avatar or '',
         'text':          msg.text or '',
         'created_at':    str(msg.created_at) if msg.created_at else '',
+        'reply_to_id':     msg.reply_to_id or '',
+        'reply_to_sender': msg.reply_to_sender or '',
+        'reply_to_text':   msg.reply_to_text or '',
+        'type':      msg.msg_type or 'text',
+        'file_url':  msg.file_url or '',
+        'file_name': msg.file_name or '',
+        'duration':  int(msg.duration) if msg.duration else 0,
     }
 
 
@@ -120,9 +153,15 @@ def firebase_token(request):
     methods=['POST'],
     tags=['Chat'],
     summary='Отправить сообщение в чат своей группы',
-    description='Сообщение сохраняется в Firestore, подписанные листенеры группы получают его мгновенно.',
+    description=(
+        'Сообщение сохраняется в Firestore, подписанные листенеры группы получают его мгновенно. '
+        'Текстовое сообщение — JSON с полем `text`. Фото или аудио — multipart/form-data '
+        'с файлом в поле `file` (текст тогда необязателен и становится подписью); '
+        'для голосового передайте `type=voice`, длительность — в `duration` (секунды). '
+        'Файлы хранятся на Google Drive в папке группы.'
+    ),
     parameters=[AUTH_HEADER_PARAM],
-    request=SendMessageRequestSerializer,
+    request={'multipart/form-data': SendMessageRequestSerializer},
     responses={
         201: SendMessageResponseSerializer,
         400: ErrorResponseSerializer,
@@ -166,34 +205,138 @@ def messages(request):
     return _list_messages(request, group_id)
 
 
+def _validate_chat_file(request):
+    """
+    Валидирует вложение из request.FILES['file'].
+    Возвращает (msg_type, duration, None) или (None, None, error_response).
+    Для сообщения без файла — ('text', None, None).
+    """
+    file = request.FILES.get('file')
+    if not file:
+        return 'text', None, None
+
+    content_type = (file.content_type or '').lower()
+    if content_type in ALLOWED_CHAT_IMAGE_TYPES:
+        if file.size > MAX_CHAT_IMAGE_SIZE:
+            return None, None, Response(
+                {'error': f'Фото слишком большое. Максимум {MAX_CHAT_IMAGE_SIZE // (1024 * 1024)} МБ'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        msg_type = 'image'
+    elif content_type in ALLOWED_CHAT_AUDIO_TYPES:
+        if file.size > MAX_CHAT_AUDIO_SIZE:
+            return None, None, Response(
+                {'error': f'Аудио слишком большое. Максимум {MAX_CHAT_AUDIO_SIZE // (1024 * 1024)} МБ'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Голосовое отличается от простого аудиофайла только пометкой клиента
+        requested = (request.data.get('type') or '').strip().lower()
+        msg_type = 'voice' if requested == 'voice' else 'audio'
+    else:
+        return None, None, Response(
+            {'error': 'Неподдерживаемый тип файла. Разрешены фото (JPEG/PNG/WebP/GIF) и аудио'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    duration = None
+    raw_duration = request.data.get('duration')
+    if raw_duration not in (None, ''):
+        try:
+            duration = max(0, int(float(raw_duration)))
+        except (ValueError, TypeError):
+            duration = None
+    return msg_type, duration, None
+
+
+def _reply_snippet(original) -> str:
+    """Текст цитаты для reply-плашки: текст оригинала или медиа-плейсхолдер."""
+    base = original.text or MEDIA_PLACEHOLDERS.get(original.msg_type or '', '')
+    snippet = base[:REPLY_SNIPPET_LENGTH]
+    if len(base) > REPLY_SNIPPET_LENGTH:
+        snippet += '…'
+    return snippet
+
+
 def _send_message(request, user, group_id):
     text = (request.data.get('text') or '').strip()
-    if not text:
-        return Response({'error': 'Поле "text" обязательно'}, status=status.HTTP_400_BAD_REQUEST)
+    file = request.FILES.get('file')
+    if not text and not file:
+        return Response(
+            {'error': 'Нужно передать текст в поле "text" и/или файл в поле "file"'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     if len(text) > MAX_TEXT_LENGTH:
         return Response(
             {'error': f'Сообщение слишком длинное. Максимум {MAX_TEXT_LENGTH} символов'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    msg_type, duration, err = _validate_chat_file(request)
+    if err:
+        return err
+
+    reply_to = (request.data.get('reply_to') or '').strip()
+    original = None
+    if reply_to:
+        try:
+            original = ChatMessage.collection.get(f'groups/{group_id}/chat_messages/{reply_to}')
+        except Exception:
+            original = None
+        if not original:
+            return Response(
+                {'error': 'Сообщение из "reply_to" не найдено в чате вашей группы'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    # Загрузка вложения — после всех проверок, чтобы не плодить сирот на Drive
+    file_id = file_url = ''
+    if file:
+        ext = ''
+        if '.' in file.name:
+            ext = re.sub(r'[^A-Za-z0-9]', '', file.name.rsplit('.', 1)[-1])[:5].lower()
+        ext = ext or _MIME_EXT.get((file.content_type or '').lower(), 'bin')
+        try:
+            file_id, file_url = upload_chat_file(
+                file, group_id, f'{msg_type}_{uuid4().hex}.{ext}', file.content_type,
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Ошибка загрузки файла на Google Drive: {e}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
     msg = ChatMessage(parent=f'groups/{group_id}')
     msg.sender_id = user.id
     msg.sender_name = user.fullname or user.username
     msg.sender_avatar = user.avatar or ''
     msg.text = text
+    msg.msg_type = msg_type
+    if file:
+        msg.file_url = file_url
+        msg.file_id = file_id
+        msg.file_name = file.name or ''
+        if duration is not None:
+            msg.duration = duration
+    if original:
+        msg.reply_to_id = original.id
+        msg.reply_to_sender = original.sender_name or ''
+        msg.reply_to_text = _reply_snippet(original)
     msg.created_at = datetime.now(timezone.utc)
     try:
         msg.save()
     except Exception as e:
+        if file_id:
+            delete_file(file_id)
         return Response(
             {'error': f'Ошибка сохранения сообщения: {e}'},
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
+    push_text = text or MEDIA_PLACEHOLDERS.get(msg_type, 'Файл')
     timer = threading.Timer(
         READ_GRACE_SECONDS,
         _push_unread_members,
-        args=(group_id, msg.id, msg.created_at, user.id, msg.sender_name, text),
+        args=(group_id, msg.id, msg.created_at, user.id, msg.sender_name, push_text),
     )
     timer.daemon = True
     timer.start()
@@ -292,7 +435,7 @@ def _list_messages(request, group_id):
         'Клиент вызывает это, когда пользователь видит сообщения (чат открыт '
         'и новые сообщения показаны). Все сообщения с `created_at` не позже '
         'указателя считаются просмотренными этим пользователем. Пока указатель '
-        'старше сообщения, через ~30 секунд после отправки пользователю уйдёт push.'
+        'старше сообщения, через ~4 секунды после отправки пользователю уйдёт push.'
     ),
     parameters=[AUTH_HEADER_PARAM],
     responses={
@@ -455,5 +598,59 @@ def delete_message(request, message_id):
         return Response({'error': 'Можно удалять только свои сообщения'}, status=status.HTTP_403_FORBIDDEN)
 
     ChatMessage.collection.delete(key)
+    if msg.file_id:
+        delete_file(msg.file_id)
     log_action(request, 'delete', 'ChatMessage', message_id, {'group_id': group_id})
     return Response({'message': 'Сообщение удалено'})
+
+
+# ---------------------------------------------------------------------------
+# Очистка чата группы (только админ)
+# ---------------------------------------------------------------------------
+
+def _purge_collection(model, parent_key: str) -> int:
+    """Удалить все документы сабколлекции. Возвращает количество удалённых."""
+    total = 0
+    while True:
+        docs = list(model.collection.parent(parent_key).fetch(300))
+        if not docs:
+            return total
+        for doc in docs:
+            model.collection.delete(doc.key)
+            total += 1
+
+
+@extend_schema(
+    tags=['Chat'],
+    summary='Очистить чат группы (только админ)',
+    description=(
+        'Полная очистка чата группы: удаляются все сообщения и указатели чтения '
+        'из Firestore, а также папка вложений группы (фото/аудио) на Google Drive. '
+        'Операция необратима.'
+    ),
+    parameters=[AUTH_HEADER_PARAM],
+    responses={
+        200: ClearChatResponseSerializer,
+        404: ErrorResponseSerializer,
+        **UNAUTHORIZED_RESPONSES,
+    },
+)
+@api_view(['DELETE'])
+@admin_required
+def admin_clear_chat(request, group_id):
+    try:
+        group = Group.collection.get(f'groups/{group_id}')
+    except Exception:
+        group = None
+    if not group:
+        return Response({'error': 'Группа не найдена'}, status=status.HTTP_404_NOT_FOUND)
+
+    deleted = _purge_collection(ChatMessage, f'groups/{group_id}')
+    _purge_collection(ChatReadStatus, f'groups/{group_id}')
+    delete_chat_folder(group_id)
+
+    log_action(request, 'delete', 'ChatGroup', group_id, {'messages_deleted': deleted})
+    return Response({
+        'message': f'Чат группы "{group.name or group_id}" очищен',
+        'messages_deleted': deleted,
+    })

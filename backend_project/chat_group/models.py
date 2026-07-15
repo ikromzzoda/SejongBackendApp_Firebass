@@ -1,5 +1,5 @@
 from fireo.models import Model
-from fireo.fields import TextField, DateTime
+from fireo.fields import TextField, DateTime, NumberField
 
 
 class ChatMessage(Model):
@@ -13,7 +13,24 @@ class ChatMessage(Model):
     sender_id     = TextField(required=True)
     sender_name   = TextField()
     sender_avatar = TextField()
-    text          = TextField(required=True)
+    # Пустой text допустим у медиа-сообщений (фото/аудио без подписи);
+    # обязательность текста для текстовых сообщений проверяет view
+    text          = TextField()
+    # Вложение: msg_type — 'text' | 'image' | 'voice' | 'audio' (в Firestore
+    # поле называется 'type'). Файл лежит на Google Drive в папке группы
+    # Sejong Cloud/chat/{group_id}; duration — длительность аудио в секундах
+    # (присылает клиент, для отрисовки голосового пузыря)
+    msg_type  = TextField(column_name='type')
+    file_url  = TextField()
+    file_id   = TextField()
+    file_name = TextField()
+    duration  = NumberField()
+    # Ответ на другое сообщение (как в Telegram). reply_to_text — снапшот
+    # текста оригинала на момент ответа: превью живёт даже после удаления
+    # оригинала.
+    reply_to_id     = TextField()
+    reply_to_sender = TextField()
+    reply_to_text   = TextField()
     # Без auto=True: FireO пишет SERVER_TIMESTAMP-сентинел, из-за чего
     # значение недоступно сразу после save() для ответа клиенту
     created_at    = DateTime()

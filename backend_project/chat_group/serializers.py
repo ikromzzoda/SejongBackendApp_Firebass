@@ -8,10 +8,21 @@ class ChatMessageSerializer(serializers.Serializer):
     sender_avatar = serializers.CharField()
     text          = serializers.CharField()
     created_at    = serializers.CharField()
+    reply_to_id     = serializers.CharField(allow_blank=True, help_text='ID сообщения, на которое дан ответ (пусто, если это не ответ)')
+    reply_to_sender = serializers.CharField(allow_blank=True, help_text='Имя автора цитируемого сообщения')
+    reply_to_text   = serializers.CharField(allow_blank=True, help_text='Снапшот текста цитируемого сообщения (до 200 символов)')
+    type      = serializers.CharField(help_text="Тип сообщения: 'text' | 'image' | 'voice' | 'audio'")
+    file_url  = serializers.CharField(allow_blank=True, help_text='Публичная ссылка на вложение (Google Drive)')
+    file_name = serializers.CharField(allow_blank=True, help_text='Оригинальное имя файла')
+    duration  = serializers.IntegerField(help_text='Длительность аудио в секундах (0, если не передана)')
 
 
 class SendMessageRequestSerializer(serializers.Serializer):
-    text = serializers.CharField(max_length=2000)
+    text     = serializers.CharField(required=False, max_length=2000, help_text='Текст сообщения; при наличии файла — подпись (необязательна)')
+    file     = serializers.FileField(required=False, help_text='Фото (JPEG/PNG/WebP/GIF, до 3 МБ) или аудио (до 5 МБ)')
+    type     = serializers.CharField(required=False, help_text="'voice' — пометить аудиофайл как голосовое сообщение")
+    duration = serializers.IntegerField(required=False, help_text='Длительность аудио в секундах (для отрисовки плеера)')
+    reply_to = serializers.CharField(required=False, help_text='ID сообщения этого же чата, на которое даётся ответ')
 
 
 class SendMessageResponseSerializer(serializers.Serializer):
@@ -45,6 +56,11 @@ class ReadStatusResponseSerializer(serializers.Serializer):
 class SeenByResponseSerializer(serializers.Serializer):
     total   = serializers.IntegerField()
     seen_by = ReadStatusEntrySerializer(many=True)
+
+
+class ClearChatResponseSerializer(serializers.Serializer):
+    message           = serializers.CharField()
+    messages_deleted  = serializers.IntegerField()
 
 
 class FirebaseTokenResponseSerializer(serializers.Serializer):

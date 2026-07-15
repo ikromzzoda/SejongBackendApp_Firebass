@@ -9,4 +9,5 @@ urlpatterns = [
     path('messages/<str:message_id>/', views.delete_message, name='chat-delete-message'),
     path('read/', views.mark_read, name='chat-mark-read'),
     path('read-status/', views.read_status, name='chat-read-status'),
+    path('admin/<str:group_id>/clear/', views.admin_clear_chat, name='chat-admin-clear'),
 ]

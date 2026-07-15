@@ -134,6 +134,48 @@ def upload_announcement_image(file_obj, filename: str, mime_type: str) -> tuple[
 
 
 # ---------------------------------------------------------------------------
+# Чат
+# ---------------------------------------------------------------------------
+
+CHAT_FOLDER_ROOT = 'Sejong Cloud/chat'
+
+
+def upload_chat_file(file_obj, group_id: str, filename: str, mime_type: str) -> tuple[str, str]:
+    """Загрузить вложение чата в папку группы. Возвращает (file_id, public_url)."""
+    return _upload_to_path(file_obj, f'{CHAT_FOLDER_ROOT}/{group_id}', filename, mime_type)
+
+
+def _find_folder(service, path: str):
+    """ID папки по пути или None, если какого-то звена нет. Ничего не создаёт."""
+    parts = [p for p in path.strip('/').split('/') if p]
+    parent_id = 'root'
+    for part in parts:
+        query = (
+            f"name='{part}' "
+            f"and mimeType='application/vnd.google-apps.folder' "
+            f"and '{parent_id}' in parents "
+            f"and trashed=false"
+        )
+        files = service.files().list(q=query, fields='files(id)').execute().get('files', [])
+        if not files:
+            return None
+        parent_id = files[0]['id']
+    return parent_id
+
+
+def delete_chat_folder(group_id: str) -> None:
+    """Удалить папку чата группы на Drive со всеми вложениями. Best-effort."""
+    path = f'{CHAT_FOLDER_ROOT}/{group_id}'
+    try:
+        service = _get_service()
+        folder_id = _folder_id_cache.pop(path, None) or _find_folder(service, path)
+        if folder_id:
+            service.files().delete(fileId=folder_id).execute()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Уведомления
 # ---------------------------------------------------------------------------
 
