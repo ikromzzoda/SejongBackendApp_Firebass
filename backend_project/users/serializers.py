@@ -62,6 +62,10 @@ class LoginResponseSerializer(serializers.Serializer):
     refresh_token = serializers.CharField()
     status = serializers.ChoiceField(choices=STATUS_CHOICES)
     verification_status = serializers.ChoiceField(choices=VERIFICATION_CHOICES)
+    unread_contact_messages = serializers.IntegerField(
+        required=False,
+        help_text='Только для Admin: число непрочитанных обращений «связаться с админом»',
+    )
 
 
 class TokenRefreshResponseSerializer(serializers.Serializer):
@@ -130,7 +134,7 @@ class RegisterRequestSerializer(serializers.Serializer):
 
 
 class LoginRequestSerializer(serializers.Serializer):
-    username = serializers.CharField()
+    username = serializers.CharField(help_text='Username или email пользователя')
     password = serializers.CharField()
     device_token = serializers.CharField()
 

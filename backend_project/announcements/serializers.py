@@ -70,3 +70,31 @@ class ListAnnouncementsResponseSerializer(serializers.Serializer):
 
 class GetAnnouncementResponseSerializer(serializers.Serializer):
     announcement = AnnouncementSerializer()
+
+
+# ---------------------------------------------------------------------------
+# Связаться с админом
+# ---------------------------------------------------------------------------
+
+class ContactAdminRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField(help_text="Почта для обратной связи")
+    message = serializers.CharField(help_text="Текст обращения (до 2000 символов)")
+    name = serializers.CharField(required=False, help_text="Имя отправителя")
+    phone_number = serializers.CharField(required=False, help_text="Телефон для обратной связи")
+
+
+class ContactMessageSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    name = serializers.CharField()
+    email = serializers.CharField()
+    phone_number = serializers.CharField()
+    message = serializers.CharField()
+    is_read = serializers.BooleanField()
+    created_at = serializers.CharField()
+
+
+class ListContactMessagesResponseSerializer(serializers.Serializer):
+    total = serializers.IntegerField()
+    unread_count = serializers.IntegerField()
+    has_more = serializers.BooleanField()
+    messages = ContactMessageSerializer(many=True)

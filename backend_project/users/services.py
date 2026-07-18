@@ -24,8 +24,8 @@ RESET_CODE_LIFETIME_MINUTES = 15
 RESET_CODE_MAX_ATTEMPTS     = 5
 RESET_CODE_RESEND_SECONDS   = 600  # повторная отправка кода — не чаще раза в 10 минут
 
-# Единый ответ forgot-password: не раскрываем, зарегистрирован ли email
-FORGOT_PASSWORD_MESSAGE = 'Если такой email зарегистрирован, код отправлен на почту.'
+# Единый успешный ответ forgot-password (в т.ч. при rate-limit — код уже отправлен)
+FORGOT_PASSWORD_MESSAGE = 'Код отправлен на почту.'
 
 
 def _clear_email_code(user):

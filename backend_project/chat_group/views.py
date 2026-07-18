@@ -25,6 +25,7 @@ from .serializers import (
     MarkReadResponseSerializer,
     ReadStatusResponseSerializer,
     SeenByResponseSerializer,
+    ChatMembersResponseSerializer,
     ClearChatResponseSerializer,
 )
 
@@ -421,6 +422,47 @@ def _list_messages(request, group_id):
     has_more = len(raw) > limit
     items = [_message_dict(m) for m in raw[:limit]]
     return Response({'total': len(items), 'has_more': has_more, 'messages': items})
+
+
+# ---------------------------------------------------------------------------
+# Участники чата
+# ---------------------------------------------------------------------------
+
+@extend_schema(
+    tags=['Chat'],
+    summary='Студенты чата своей группы',
+    description=(
+        'Количество студентов в чате группы и их данные: аватар, username, fullname. '
+        'Возвращаются только пользователи со статусом Student, состоящие в группе '
+        'текущего пользователя.'
+    ),
+    parameters=[AUTH_HEADER_PARAM],
+    responses={
+        200: ChatMembersResponseSerializer,
+        403: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
+        **UNAUTHORIZED_RESPONSES,
+    },
+)
+@api_view(['GET'])
+@jwt_required
+def members(request):
+    _, group_id, err = _get_chat_user(request)
+    if err:
+        return err
+
+    students = [
+        {
+            'user_id':  m.id,
+            'username': m.username or '',
+            'fullname': m.fullname or '',
+            'avatar':   m.avatar or '',
+        }
+        for m in User.collection.filter('group', '==', group_id).fetch(500)
+        if m.status == 'Student'
+    ]
+    students.sort(key=lambda s: (s['fullname'] or s['username']).lower())
+    return Response({'total': len(students), 'members': students})
 
 
 # ---------------------------------------------------------------------------

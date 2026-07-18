@@ -10,7 +10,8 @@ from utils.fcm import send_notification_to_statuses
 from utils.schema import AUTH_HEADER_PARAM, ADMIN_RESPONSES, UNAUTHORIZED_RESPONSES, ErrorResponseSerializer, MessageResponseSerializer
 from audit_logs.utils import log_action
 from info.models import Notification
-from .models import Announcement
+from users.validators import _normalize_email, _validate_email
+from .models import Announcement, ContactMessage
 from .serializers import (
     AdminCreateAnnouncementRequestSerializer,
     AdminCreateAnnouncementResponseSerializer,
@@ -18,6 +19,9 @@ from .serializers import (
     AdminEditAnnouncementResponseSerializer,
     ListAnnouncementsResponseSerializer,
     GetAnnouncementResponseSerializer,
+    ContactAdminRequestSerializer,
+    ListContactMessagesResponseSerializer,
+    ContactMessageSerializer,
 )
 
 _ALL_STATUSES = ['Guest', 'Student', 'Teacher', 'Admin']
@@ -26,6 +30,10 @@ ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
 MAX_IMAGE_SIZE = 2 * 1024 * 1024   # 2 МБ
 MAX_IMAGES = 10
 _CACHE_TTL = 60  # seconds
+
+MAX_CONTACT_MESSAGE_LEN = 2000
+UNREAD_COUNT_FETCH_LIMIT = 500     # лимит выборки при подсчёте непрочитанных обращений
+CONTACT_RATE_LIMIT_SECONDS = 60    # не чаще одного обращения в минуту с одного IP
 
 
 def _ann_dict(ann) -> dict:
@@ -307,3 +315,184 @@ def get_announcement(request, ann_id):
     if err:
         return err
     return Response({'announcement': _ann_dict(ann)})
+
+
+# ---------------------------------------------------------------------------
+# Связаться с админом
+# ---------------------------------------------------------------------------
+
+def _contact_dict(msg) -> dict:
+    return {
+        'id':           msg.id,
+        'name':         msg.name or '',
+        'email':        msg.email or '',
+        'phone_number': msg.phone_number or '',
+        'message':      msg.message or '',
+        'is_read':      bool(msg.is_read),
+        'created_at':   str(msg.created_at) if msg.created_at else '',
+    }
+
+
+def count_unread_contact_messages() -> int:
+    """Количество непрочитанных обращений к админу (используется и при логине админа)."""
+    try:
+        return len(list(
+            ContactMessage.collection.filter('is_read', '==', False).fetch(UNREAD_COUNT_FETCH_LIMIT)
+        ))
+    except Exception:
+        return 0
+
+
+def _get_contact_message_or_404(msg_id):
+    try:
+        msg = ContactMessage.collection.get(f'contact_messages/{msg_id}')
+    except Exception:
+        msg = None
+    if not msg:
+        return None, Response({'error': 'Обращение не найдено'}, status=status.HTTP_404_NOT_FOUND)
+    return msg, None
+
+
+@extend_schema(
+    tags=['Announcements'],
+    summary='Связаться с админом (без авторизации)',
+    description=(
+        'Отправляет сообщение администратору. Доступно без авторизации — в том числе '
+        'пользователям, которые не могут зарегистрироваться, войти или получить код на почту. '
+        'Админы получают push-уведомление о новом обращении. '
+        f'Не чаще одного обращения в {CONTACT_RATE_LIMIT_SECONDS} секунд с одного IP.'
+    ),
+    request=ContactAdminRequestSerializer,
+    responses={
+        201: MessageResponseSerializer,
+        400: ErrorResponseSerializer,
+        429: ErrorResponseSerializer,
+        502: ErrorResponseSerializer,
+    },
+)
+@api_view(['POST'])
+def contact_admin(request):
+    data    = request.data
+    email   = _normalize_email(data.get('email'))
+    message = (data.get('message') or '').strip()
+    name    = (data.get('name') or '').strip()
+    phone   = (data.get('phone_number') or '').strip()
+
+    if not email or not message:
+        return Response(
+            {'error': 'Поля "email" и "message" обязательны'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    err = _validate_email(email)
+    if err:
+        return err
+
+    if len(message) > MAX_CONTACT_MESSAGE_LEN:
+        return Response(
+            {'error': f'Сообщение слишком длинное. Максимум {MAX_CONTACT_MESSAGE_LEN} символов'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit по IP: эндпоинт открытый, защищаемся от спама
+    ip = (request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+          or request.META.get('REMOTE_ADDR', ''))
+    rate_key = f'contact_admin_{ip}'
+    if cache.get(rate_key):
+        return Response(
+            {'error': 'Слишком часто. Подождите минуту и попробуйте снова.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    msg = ContactMessage()
+    msg.name         = name
+    msg.email        = email
+    msg.phone_number = phone
+    msg.message      = message
+    msg.is_read      = False
+    try:
+        msg.save()
+    except Exception as e:
+        return Response(
+            {'error': f'Ошибка сохранения обращения: {e}'},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    cache.set(rate_key, 1, CONTACT_RATE_LIMIT_SECONDS)
+
+    sender  = name or email
+    preview = message if len(message) <= 100 else message[:100] + '…'
+    send_notification_to_statuses(['Admin'], 'Новое обращение к администратору', f'{sender}: {preview}')
+
+    return Response(
+        {'message': 'Сообщение отправлено администратору. Мы свяжемся с вами по указанной почте.'},
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@extend_schema(
+    tags=['Announcements'],
+    summary='Обращения пользователей (admin)',
+    description='Список обращений «связаться с админом», новые сверху. Также возвращает число непрочитанных.',
+    parameters=[
+        AUTH_HEADER_PARAM,
+        OpenApiParameter('limit', OpenApiTypes.INT, description='Максимум записей (по умолчанию 20, максимум 100)'),
+    ],
+    responses={200: ListContactMessagesResponseSerializer, **ADMIN_RESPONSES},
+)
+@api_view(['GET'])
+@admin_required
+def admin_list_contact_messages(request):
+    try:
+        limit = min(int(request.query_params.get('limit', 20)), 100)
+    except (ValueError, TypeError):
+        limit = 20
+
+    raw = list(ContactMessage.collection.order('-created_at').fetch(limit + 1))
+    has_more = len(raw) > limit
+    items = [_contact_dict(m) for m in raw[:limit]]
+
+    return Response({
+        'total':        len(items),
+        'unread_count': count_unread_contact_messages(),
+        'has_more':     has_more,
+        'messages':     items,
+    })
+
+
+@extend_schema(
+    tags=['Announcements'],
+    summary='Отметить обращение прочитанным (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: MessageResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
+@api_view(['PATCH'])
+@admin_required
+def admin_mark_contact_message_read(request, msg_id):
+    msg, err = _get_contact_message_or_404(msg_id)
+    if err:
+        return err
+
+    if not msg.is_read:
+        msg.is_read = True
+        msg.update()
+
+    return Response({'message': 'Обращение отмечено прочитанным'})
+
+
+@extend_schema(
+    tags=['Announcements'],
+    summary='Удалить обращение (admin)',
+    parameters=[AUTH_HEADER_PARAM],
+    responses={200: MessageResponseSerializer, 404: ErrorResponseSerializer, **ADMIN_RESPONSES},
+)
+@api_view(['DELETE'])
+@admin_required
+def admin_delete_contact_message(request, msg_id):
+    msg, err = _get_contact_message_or_404(msg_id)
+    if err:
+        return err
+
+    ContactMessage.collection.delete(f'contact_messages/{msg_id}')
+    log_action(request, 'delete', 'ContactMessage', msg_id)
+    return Response({'message': 'Обращение удалено'})

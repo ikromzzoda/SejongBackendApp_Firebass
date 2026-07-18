@@ -326,7 +326,11 @@ def resend_email_code(request):
 @extend_schema(
     tags=['Users'],
     summary='Вход',
-    description='Вход по username и паролю. Возвращает access и refresh токены.',
+    description=(
+        'Вход по username или email и паролю. В поле `username` можно передать '
+        'либо username, либо email (строка с `@` считается email). '
+        'Возвращает access и refresh токены.'
+    ),
     request=LoginRequestSerializer,
     responses={
         200: LoginResponseSerializer,
@@ -337,21 +341,27 @@ def resend_email_code(request):
 @api_view(['POST'])
 def login(request):
     data     = request.data
-    username = data.get('username', '').strip()
+    identifier = data.get('username', '').strip()
     password = data.get('password', '')
 
     device_token = data.get('device_token', '').strip()
 
-    if not username or not password or not device_token:
+    if not identifier or not password or not device_token:
         return Response(
-            {'error': 'Введите username, пароль и device_token'},
+            {'error': 'Введите username или email, пароль и device_token'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    users = list(User.collection.filter('username', '==', username).fetch(1))
+    # Строка с '@' — скорее всего email; если по почте никого нет,
+    # пробуем как username (формат username нигде не ограничен)
+    users = []
+    if '@' in identifier:
+        users = list(User.collection.filter('email', '==', _normalize_email(identifier)).fetch(1))
+    if not users:
+        users = list(User.collection.filter('username', '==', identifier).fetch(1))
     if not users or not check_password(password, users[0].password):
         return Response(
-            {'error': 'Неверный username или пароль'},
+            {'error': 'Неверный username/email или пароль'},
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -378,13 +388,25 @@ def login(request):
     user.refresh_token_jti = refresh_jti
     user.update()
 
-    return Response({
+    response_data = {
         'message':       'Вход выполнен',
         'token':         access_token,
         'refresh_token': refresh_token,
         'status':        user.status,
         'verification_status': user.verification_status,
-    })
+    }
+
+    # Админ при входе видит, сколько обращений «связаться с админом» не прочитано
+    if user.status == 'Admin':
+        from announcements.views import count_unread_contact_messages
+        unread = count_unread_contact_messages()
+        response_data['unread_contact_messages'] = unread
+        if unread:
+            response_data['message'] = (
+                f'Вход выполнен. У вас {unread} непрочитанных обращений от пользователей.'
+            )
+
+    return Response(response_data)
 
 
 @extend_schema(
@@ -487,13 +509,13 @@ def token_refresh(request):
     description=(
         'Отправляет 6-значный код на email пользователя. Код действует '
         f'{RESET_CODE_LIFETIME_MINUTES} минут, повторная отправка — не чаще раза в '
-        f'{RESET_CODE_RESEND_SECONDS // 60} минут. Ответ одинаковый независимо от того, '
-        'существует ли email (защита от перебора).'
+        f'{RESET_CODE_RESEND_SECONDS // 60} минут. Если аккаунта с такой почтой нет — 404.'
     ),
     request=ForgotPasswordRequestSerializer,
     responses={
         200: MessageResponseSerializer,
         400: ErrorResponseSerializer,
+        404: ErrorResponseSerializer,
     },
 )
 @api_view(['POST'])
@@ -504,7 +526,10 @@ def forgot_password(request):
 
     users = list(User.collection.filter('email', '==', email).fetch(1))
     if not users:
-        return Response({'message': FORGOT_PASSWORD_MESSAGE})
+        return Response(
+            {'error': 'Аккаунт с такой почтой не существует. Введите актуальную почту.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
     user = users[0]
     now  = datetime.now(timezone.utc)

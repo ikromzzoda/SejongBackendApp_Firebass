@@ -58,6 +58,18 @@ class SeenByResponseSerializer(serializers.Serializer):
     seen_by = ReadStatusEntrySerializer(many=True)
 
 
+class ChatMemberSerializer(serializers.Serializer):
+    user_id  = serializers.CharField()
+    username = serializers.CharField()
+    fullname = serializers.CharField(allow_blank=True)
+    avatar   = serializers.CharField(allow_blank=True)
+
+
+class ChatMembersResponseSerializer(serializers.Serializer):
+    total   = serializers.IntegerField(help_text='Количество студентов в чате группы')
+    members = ChatMemberSerializer(many=True)
+
+
 class ClearChatResponseSerializer(serializers.Serializer):
     message           = serializers.CharField()
     messages_deleted  = serializers.IntegerField()

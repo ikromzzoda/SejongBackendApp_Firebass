@@ -1,5 +1,5 @@
 from fireo.models import Model
-from fireo.fields import TextField, DateTime, ListField
+from fireo.fields import TextField, DateTime, ListField, BooleanField
 
 
 class Announcement(Model):
@@ -21,3 +21,17 @@ class Announcement(Model):
 
     class Meta:
         collection_name = 'announcements'
+
+
+class ContactMessage(Model):
+    """Обращение к админу. Отправляется без авторизации — в т.ч. пользователями,
+    которые не могут зарегистрироваться или войти."""
+    name         = TextField()
+    email        = TextField()
+    phone_number = TextField()
+    message      = TextField()
+    is_read      = BooleanField()
+    created_at   = DateTime(auto=True)
+
+    class Meta:
+        collection_name = 'contact_messages'
